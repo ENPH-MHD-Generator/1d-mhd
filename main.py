@@ -54,7 +54,7 @@ def get_mach_number(primary_gas_speed, primary_gas_temperature):
 def solve_plasma_properties(u, Tp, np_local, ns_local, B0, eta_L,
                             relax=0.5, max_iter=12):
     """
-    Local micro/EM solve for a Hall generator slice (Ey=0, Jz=Ez=0, B=B0*ẑ).
+    Local plasma properties solver for a Hall generator slice (Ey=0, Jz=Ez=0, B=B0).
     Returns dict with Te, ne, nuM, nuE, eta, beta, Z, Jx, Jy, Ex, S_ohm, S_load.
     """
     # initial guesses
@@ -74,18 +74,15 @@ def solve_plasma_properties(u, Tp, np_local, ns_local, B0, eta_L,
         Ex = Ex_over_eta * eta
 
         J2 = Jx**2 + Jy**2
-        S_ohm = eta * J2                  # W/m^3
-        S_load = -Ex * Jx                 # W/m^3
+        S_ohm = eta * J2
+        S_load = -Ex * Jx
 
-        # Freidberg Eq. 3.14: ΔT = (5 M^2 / 9) * β^2(β^2+(1+Z)^2)/(β^2+1+Z)^2
         M = np.sqrt((3.0/5.0) * (m_p * u**2) / (C.k * Tp))
         DeltaT = (5.0 * M**2 / 9.0) * (beta**2 * (beta**2 + (1.0 + Z)**2)) / (denom**2)
         Te_new = Tp * (1.0 + DeltaT)
 
-        # update ne via Saha at new Te
         ne_new = get_electron_density(Te_new, ns_local)
 
-        # relax
         Te = relax * Te_new + (1.0 - relax) * Te
         ne = relax * ne_new + (1.0 - relax) * ne
 
@@ -110,11 +107,8 @@ def march_channel(num_slices,
     x = np.linspace(0.0, L, num_slices)
     dx = L / max(1, (num_slices - 1))
 
-    # distributed load resistivity: eta_L = R_L * A / L
     eta_L = R_L * A / L
-    eta_L = 1.60
 
-    # inlet state
     rho0 = p0 / (R * Tp0)
     np0 = rho0 / m_p
     ns0 = seed_frac0 * np0
@@ -143,7 +137,6 @@ def march_channel(num_slices,
     p[0] = np_arr[0] * C.k * Tp[0]
 
     for i in range(num_slices):
-        # continuity: n_p = phi_n / u
         np_arr[i] = Phi_n / max(1e-6, u[i])
         ns_arr[i] = ns0 * (np_arr[i] / np0)
         p[i] = np_arr[i] * C.k * Tp[i]
@@ -164,11 +157,6 @@ def march_channel(num_slices,
             break
 
         dTpdx = (S_ohm[i] - S_load[i]) / (m_p * np_arr[i] * u[i] * C_p)
-
-        # couple momentum with dp/dx self-consistently (constant area)
-        # p = phi_n kB Tp / u
-        # dp/dx = phi_n kB[(1/u) dTp/dx - (Tp/u^2) du/dx]
-
         denom = (m_p * Phi_n + (Phi_n * C.k * Tp[i]) / (u[i]**2))
         dudx = (Jy[i] * B0 - (Phi_n * C.k / u[i]) * dTpdx) / denom
 
@@ -188,10 +176,12 @@ def main():
     inlet_primary_gas_pressure = 8.01e5  # Pa
     inlet_primary_gas_speed = 735.115  # m/s
     magnetic_field = 8.0  # T
-    load_resistance = 0.14  # Ohm
+    load_resistivity = 1.60 # Ohm * m
     channel_area = 4.0e-1  # 1 cm x 1 cm
     channel_length = 1.0  # m
     seed_gas_fraction = 6.18e-7
+
+    load_resistance = load_resistivity * channel_length / channel_area
 
     out = march_channel(
         num_slices=num_slices,
@@ -208,7 +198,7 @@ def main():
     print(f"n_e = {out['ne'][0]:.3e}")
 
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(6,4))
+    plt.figure(figsize=(6, 4))
 
     plt.plot(out['x'], out['S_load'], label='Te', linestyle='--')
     plt.xlabel('x [m]'); plt.ylabel('Temperature [K]'); plt.legend(); plt.tight_layout(); plt.show()
@@ -231,7 +221,7 @@ def plot_results(out):
     u = out['u']
     p = out['p']
 
-    plt.figure(figsize=(7,4))
+    plt.figure(figsize=(7, 4))
     plt.plot(x, Tp, label=r"$T_p$", linewidth=2)
     plt.plot(x, Te, label=r"$T_e$", linestyle='--', linewidth=2)
     plt.xlabel("x [m]")
@@ -242,7 +232,7 @@ def plot_results(out):
     plt.tight_layout()
     plt.show()
 
-    plt.figure(figsize=(7,4))
+    plt.figure(figsize=(7, 4))
     plt.plot(x, S_ohm, label=r"$S_{\Omega}$ (ohmic heating)", linewidth=2)
     plt.plot(x, S_load, label=r"$S_L$ (load power)", linewidth=2)
     plt.xlabel("x [m]")
@@ -253,7 +243,7 @@ def plot_results(out):
     plt.tight_layout()
     plt.show()
 
-    fig, ax1 = plt.subplots(figsize=(7,4))
+    fig, ax1 = plt.subplots(figsize=(7, 4))
 
     color1 = "tab:blue"
     ax1.set_xlabel("x [m]")
@@ -281,26 +271,28 @@ def plot_results(out):
 
 
 def summarize_performance(out, A, cp, m_p, gamma):
-    x     = out['x']
-    Tp    = out['Tp']
-    u     = out['u']
-    nparr = out['np']          # primary number density
-    p     = out['p']
-    S_L   = out['S_load']
+    # This function wqs ChatGPT'd, probably check
+
+    x = out['x']
+    Tp = out['Tp']
+    u = out['u']
+    nparr = out['np']  # primary number density
+    p = out['p']
+    S_L = out['S_load']
     S_Ohm = out['S_ohm']
 
     # inlet/outlet states
     Tp_in, Tp_out = Tp[0], Tp[-1]
-    u_in,  u_out  = u[0],  u[-1]
-    p_in,  p_out  = p[0],  p[-1]
+    u_in, u_out = u[0],  u[-1]
+    p_in, p_out = p[0],  p[-1]
 
     # mass flow (constant area)
     rho_in = m_p * nparr[0]
     mdot = rho_in * u_in * A
 
     # stagnation enthalpies (per unit mass)
-    h0_in = cp*Tp_in + 0.5*u_in**2
-    h0_out = cp*Tp_out + 0.5*u_out**2
+    h0_in = cp * Tp_in + 0.5 * u_in ** 2
+    h0_out = cp * Tp_out + 0.5 * u_out ** 2
     dh0 = h0_in - h0_out
 
     # Powers
@@ -310,7 +302,7 @@ def summarize_performance(out, A, cp, m_p, gamma):
     # Ratios
     enthalpy_extraction_ratio = dh0 / h0_in
     chi_load = (PL / mdot) / h0_in
-    eta_electrical = PL / max(1e-30, (PL + POhm))  # delivered / extracted
+    eta_electrical = PL / max(1e-30, (PL + POhm))
 
     pressure_ratio = p_in / p_out
     eta_isentropic = enthalpy_extraction_ratio / (1 - pressure_ratio ** (- (gamma - 1) / gamma))
