@@ -63,7 +63,7 @@ which in component form is,
 $$ E_x + v_{py} B_{0z} - v_{pz} B_{0y} = \eta J_x + \frac{ J_y B_z - J_z B_y }{e n_e} $$
 $$ E_y + v_{pz} B_{0x} - v_{px} B_{0z} = \eta J_y + \frac{ J_z B_x - J_x B_z }{e n_e} $$
 $$ E_z + v_{px} B_{0y} - v_{py} B_{0x} = \eta J_z + \frac{ J_x B_y - J_y B_x }{e n_e} $$
-Do
+
 where we can assume $\textbf{B}_0$ is uniform and only in the $z$-direction, the flow is along the $x$-direction so $v_{py}=v_{pz}=0$, the electrodes 
 are shorted in the $y$-direction in this setup so $E_y=0$, and no current or voltage flows in the $z$-direction so $E_z=J_z=0$. Ohm's law becoems (Friedberg 3.7),
 
