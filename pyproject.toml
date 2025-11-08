@@ -1,0 +1,21 @@
+[project]
+name = "1d-mhd"
+version = "0.1.0"
+description = "A simple, one-dimensional simulation of a linear hall MHD generator"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.7",
+    "notebook>=7.4.7",
+    "numpy>=2.3.4",
+    "scipy>=1.16.3",
+    "sympy>=1.14.0",
+]
+
+[tool.uv]
+package = false
+python-preference = "only-managed"
+python-downloads = "auto"
+
+
