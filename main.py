@@ -86,8 +86,13 @@ def solve_plasma_properties(u, Tp, np_local, ns_local, B0, eta_L,
         Te = relax * Te_new + (1.0 - relax) * Te
         ne = relax * ne_new + (1.0 - relax) * ne
 
+        K = -Ex / (beta*u*B0)
+        num = beta**2 * K * (1-K)
+        denom = 1 + (beta**2 * K)
+        eta_elec = num / denom
+
     return dict(Te=Te, ne=ne, nuM=nu_M, nuE=nu_E, eta=eta, beta=beta, Z=Z,
-                Jx=Jx, Jy=Jy, Ex=Ex, S_ohm=S_ohm, S_load=S_load)
+                Jx=Jx, Jy=Jy, Ex=Ex, S_ohm=S_ohm, S_load=S_load, eta_elec=eta_elec)
 
 
 def march_channel(num_slices,
@@ -128,6 +133,7 @@ def march_channel(num_slices,
     Ex = np.zeros_like(x)
     S_ohm = np.zeros_like(x)
     S_load = np.zeros_like(x)
+    eta_elec = np.zeros_like(x)
 
     # set inlet
     u[0] = u0
@@ -151,6 +157,7 @@ def march_channel(num_slices,
         Ex[i] = plasma['Ex']
         S_ohm[i] = plasma['S_ohm']
         S_load[i] = plasma['S_load']
+        eta_elec[i] = plasma['eta_elec']
 
         # march to next slice (skip after last)
         if i == num_slices - 1:
@@ -166,7 +173,7 @@ def march_channel(num_slices,
 
     return dict(x=x, u=u, Tp=Tp, p=p, np=np_arr, ns=ns_arr,
                 Te=Te, ne=ne, beta=beta, Z=Z, Jx=Jx, Jy=Jy, Ex=Ex,
-                S_ohm=S_ohm, S_load=S_load, eta_L=eta_L)
+                S_ohm=S_ohm, S_load=S_load, eta_L=eta_L, eta_elec=eta_elec)
 
 
 def main():
@@ -220,6 +227,7 @@ def plot_results(out):
     np_arr = out['np']
     u = out['u']
     p = out['p']
+    eta_elec = out['eta_elec']
 
     plt.figure(figsize=(7, 4))
     plt.plot(x, Tp, label=r"$T_p$", linewidth=2)
@@ -238,6 +246,16 @@ def plot_results(out):
     plt.xlabel("x [m]")
     plt.ylabel("Power Density [W/m$^3$]")
     plt.title("Ohmic Heating vs Load Power")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 4))
+    plt.plot(x, eta_elec, label=r"$\eta_{\text{elec}}$ (Local Electrical Efficiency)", linewidth=2)
+    plt.xlabel("x [m]")
+    plt.ylabel("Local Electrical Efficiency []")
+    plt.title("Local Electrical Efficiency Across Channel")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -296,8 +314,8 @@ def summarize_performance(out, A, cp, m_p, gamma):
     dh0 = h0_in - h0_out
 
     # Powers
-    PL = np.trapezoid(S_L, x) * A
-    POhm = np.trapezoid(S_Ohm, x) * A
+    PL = np.trapz(S_L, x) * A
+    POhm = np.trapz(S_Ohm, x) * A
 
     # Ratios
     enthalpy_extraction_ratio = dh0 / h0_in
