@@ -147,7 +147,7 @@ def march_channel(num_slices,
         ns_arr[i] = ns0 * (np_arr[i] / np0)
         p[i] = np_arr[i] * C.k * Tp[i]
 
-        plasma = solve_plasma_properties(u[i], Tp[i], np_arr[i], ns_arr[i], B0, eta_L)
+        plasma = solve_plasma_properties(u[i], Tp[i], np_arr[i], ns_arr[i], B0[i], eta_L)
         Te[i] = plasma['Te']
         ne[i] = plasma['ne']
         beta[i] = plasma['beta']
@@ -165,7 +165,7 @@ def march_channel(num_slices,
 
         dTpdx = (S_ohm[i] - S_load[i]) / (m_p * np_arr[i] * u[i] * C_p)
         denom = (m_p * Phi_n + (Phi_n * C.k * Tp[i]) / (u[i]**2))
-        dudx = (Jy[i] * B0 - (Phi_n * C.k / u[i]) * dTpdx) / denom
+        dudx = (Jy[i] * B0[i] - (Phi_n * C.k / u[i]) * dTpdx) / denom
 
         # explicit Euler step
         Tp[i+1] = max(50.0, Tp[i] + dTpdx * dx)
@@ -173,7 +173,17 @@ def march_channel(num_slices,
 
     return dict(x=x, u=u, Tp=Tp, p=p, np=np_arr, ns=ns_arr,
                 Te=Te, ne=ne, beta=beta, Z=Z, Jx=Jx, Jy=Jy, Ex=Ex,
-                S_ohm=S_ohm, S_load=S_load, eta_L=eta_L, eta_elec=eta_elec)
+                S_ohm=S_ohm, S_load=S_load, eta_L=eta_L, eta_elec=eta_elec, B0=B0)
+
+
+def B(L, num_slices):
+    x = np.linspace(0.0, L, num_slices)
+    B = np.zeros_like(x)
+
+    for i in range(num_slices):
+        B[i] = -8*x[i]**2 + 8*x[i] + 6
+
+    return B
 
 
 def main():
@@ -182,10 +192,10 @@ def main():
     inlet_primary_gas_temperature = 488  # K
     inlet_primary_gas_pressure = 8.01e5  # Pa
     inlet_primary_gas_speed = 735.115  # m/s
-    magnetic_field = 8.0  # T
     load_resistivity = 1.60 # Ohm * m
     channel_area = 4.0e-1  # 1 cm x 1 cm
     channel_length = 1.0  # m
+    magnetic_field = B(channel_length, num_slices) # T
     seed_gas_fraction = 6.18e-7
 
     load_resistance = load_resistivity * channel_length / channel_area
@@ -228,6 +238,7 @@ def plot_results(out):
     u = out['u']
     p = out['p']
     eta_elec = out['eta_elec']
+    B0 = out['B0']
 
     plt.figure(figsize=(7, 4))
     plt.plot(x, Tp, label=r"$T_p$", linewidth=2)
@@ -246,6 +257,16 @@ def plot_results(out):
     plt.xlabel("x [m]")
     plt.ylabel("Power Density [W/m$^3$]")
     plt.title("Ohmic Heating vs Load Power")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(7, 4))
+    plt.plot(x, B0, label=r"B (Magnetic Field)", linewidth=2)
+    plt.xlabel("x [m]")
+    plt.ylabel("Magnetic Field [B]")
+    plt.title("Magnetic Field Across Channel")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -314,8 +335,8 @@ def summarize_performance(out, A, cp, m_p, gamma):
     dh0 = h0_in - h0_out
 
     # Powers
-    PL = np.trapz(S_L, x) * A
-    POhm = np.trapz(S_Ohm, x) * A
+    PL = np.trapezoid(S_L, x) * A
+    POhm = np.trapezoid(S_Ohm, x) * A
 
     # Ratios
     enthalpy_extraction_ratio = dh0 / h0_in
