@@ -5,11 +5,13 @@ description = "A simple, one-dimensional simulation of a linear hall MHD generat
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "astropy>=7.2.0",
     "ipykernel>=7.1.0",
     "matplotlib>=3.10.7",
     "notebook>=7.4.7",
     "numpy>=2.3.4",
     "scipy>=1.16.3",
+    "scipy-stubs~=1.16.3",
     "sympy>=1.14.0",
 ]
 

@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from scipy import constants as C
 import matplotlib.pyplot as plt
@@ -64,6 +66,7 @@ def solve_plasma_properties(u, Tp, np_local, ns_local, B0, eta_L,
     for _ in range(max_iter):
         nu_E, nu_M = get_frequencies(np_local, sigma_ep, Te)
         eta = get_resistivity(nu_M, ne)
+        # eta = 1 / 500
         beta = get_hall_parameter(B0, nu_M)
         Z = eta_L / eta
 
@@ -172,17 +175,21 @@ def march_channel(num_slices,
 def main():
     num_slices = 200
 
-    inlet_primary_gas_temperature = 488  # K
-    inlet_primary_gas_pressure = 8.01e5  # Pa
-    inlet_primary_gas_speed = 735.115  # m/s
-    magnetic_field = 8.0  # T
-    load_resistivity = 1.60 # Ohm * m
-    channel_area = 4.0e-1  # 1 cm x 1 cm
-    channel_length = 1.0  # m
-    seed_gas_fraction = 6.18e-7
+    inlet_primary_gas_temperature = 2000  # K
+    inlet_primary_gas_pressure = 101.01e3  # Pa
+    inlet_primary_gas_speed = 150.115  # m/s
+    magnetic_field = 0.5  # T
+    seed_gas_fraction = 6.18e-3
+    # seed_gas_fraction = 0.00004166666667 * 1.12
+
+    load_resistivity = 1.5 / 2 * 50 / 2 / 2 / 2 / 2 / 20  # Ohm * m
+    channel_area = 48e-3 * 48e-3 # 2in * 2in in meters
+    # channel_area = (8 / 100) * (8 / 100) # 1 cm x 1 cm
+    channel_length = 0.2  # m
 
     load_resistance = load_resistivity * channel_length / channel_area
 
+    t0 = time.perf_counter()
     out = march_channel(
         num_slices=num_slices,
         L=channel_length,
@@ -194,6 +201,22 @@ def main():
         R_L=load_resistance,
         seed_frac0=seed_gas_fraction
     )
+    print(time.perf_counter() - t0)
+    exit()
+
+    x = out["x"]
+    Ex = out["Ex"]
+
+    V = -np.trapezoid(Ex, x)  # volts
+    A = channel_area
+
+    Ix_profile = out["Jx"] * A
+    Ix_in = Ix_profile[0]
+    Ix_out = Ix_profile[-1]
+
+    P = Ix_in * V
+
+    print(f"Power: {P}")
 
     print(f"n_e = {out['ne'][0]:.3e}")
 
