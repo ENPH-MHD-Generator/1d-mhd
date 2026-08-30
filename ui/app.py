@@ -142,6 +142,14 @@ m2.metric("Electrical efficiency", f"{perf['eta_electrical'] * 100:.1f} %")
 m3.metric("Isentropic efficiency", f"{perf['eta_isentropic'] * 100:.1f} %")
 m4.metric("Enthalpy extraction ratio", f"{perf['enthalpy_extraction_ratio'] * 100:.1f} %")
 
+if channel.choked:
+    st.warning(
+        f"⚠️ Flow reached M={hall_solver.max_mach_number:g} (choked, Rayleigh-flow limit) at "
+        f"x={channel.x[-1]:.4f} m -- {len(channel)} of the requested {ui_values['num_slices']} slices were "
+        "computed. Plots and metrics below only cover the channel up to that point. Reduce the magnetic field, "
+        "load resistivity, or seed fraction to push the choke point further down the channel."
+    )
+
 tab_profiles, tab_inlet, tab_optimize = st.tabs(["📈 Profiles", "🔎 Inlet Summary", "🎯 Optimize"])
 
 with tab_profiles:

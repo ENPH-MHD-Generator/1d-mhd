@@ -147,11 +147,27 @@ $$ n_p(x) v_p(x) = \Phi. $$
 
 where $\Phi$ is the number flux, which is constant in $x$.
 
-We'll also need to consider the primary gas temperature in the constant area case,
+We'll also need to consider the primary gas temperature and speed down the channel.
 
-$$ m_p n_p v_p c_p\frac{\partial T_p}{\partial x} = S_\Omega - S_L$$
-$$ m_p n_p v_p c_p\frac{\partial T_p}{\partial x} = \frac{m_e n_e \nu_M}{(\beta^2 + 1 + Z)^2} \bigg( v_p^2 \beta^2 [ \beta^2 + (1 + Z)^2] - \beta^4 Z\bigg )$$
-$$ \frac{\partial T_p}{\partial x} = \frac{\nu_E }{2 v_p c_p(\beta^2 + 1 + Z)^2} \bigg( v_p^2 \beta^2 [ \beta^2 + (1 + Z)^2] - \beta^4 Z\bigg )$$
+> **Correction:** an earlier version of this section prescribed $\partial T_p/\partial x$ and $\partial v_p/\partial x$
+> from two *independently*-motivated equations -- $m_p n_p v_p c_p \partial T_p/\partial x = S_\Omega - S_L$, and the
+> momentum equation below with $\partial p_p/\partial x$ eliminated (which also had a sign error in that elimination).
+> Neither mistake is part of the literature-derived electromagnetic/Hall physics above; both were introduced in this
+> project's own axial-march derivation. Together they broke energy conservation: numerically, the stagnation
+> enthalpy of the primary gas did not decrease by the load power extracted, and could even *increase* along the
+> channel. The derivation below fixes both, solving for $\partial T_p/\partial x$ and $\partial v_p/\partial x$
+> simultaneously from one consistent energy statement. See `tests/test_energy_accounting.py`.
+
+Of the power drawn from the plasma, only the **load power** $S_L$ (dissipated in the external circuit) actually
+leaves the primary gas stream. The Ohmic dissipation $S_\Omega$ (dissipated resistively *within* the plasma) reappears
+as heat in that same gas. Both are drawn from the flow's kinetic energy by the Lorentz retarding force $J_y B_z$:
+multiplying the momentum equation by $v_p$ and using Ohm's law (Friedberg 3.11) gives the identity
+$-J_y B_z v_p = S_\Omega + S_L$ (the mechanical power the field removes from the flow). So the correct energy
+equation for the primary gas, written in terms of the stagnation enthalpy $h_0 = c_p T_p + \frac12 v_p^2$, is
+
+$$ \rho v_p \frac{\partial h_0}{\partial x} = \underbrace{J_y B_z v_p}_{\text{Lorentz work}} + \underbrace{S_\Omega}_{\text{Joule heat redeposited}} = -S_L, $$
+
+i.e. stagnation enthalpy decreases by exactly the power delivered to the load -- nothing more, nothing less.
 
 If we then assume that the primary gas acts as an ideal gas,
 
@@ -160,11 +176,22 @@ $$ p_p = \frac{\Phi}{v_p} k T_p, $$
 $$ \frac{\partial p_p}{\partial x} = \frac{\partial}{\partial x}\bigg( \frac{\Phi}{v_p} k T_p \bigg), $$
 $$ \frac{\partial p_p}{\partial x} =  \Phi k \bigg( \frac{1}{v_p} \frac{\partial T_p}{\partial x} - \frac{T_p}{v_p^2}\frac{\partial v_p}{\partial x} \bigg), $$
 
-substituting into momentum conservation,
+substituting into momentum conservation (and correctly collecting the $\partial v_p/\partial x$ terms this time),
 
 $$ \Phi m_p \frac{\partial v_p}{\partial x} = J_y B_z - \Phi k \bigg( \frac{1}{v_p} \frac{\partial T_p}{\partial x} - \frac{T_p}{v_p^2}\frac{\partial v_p}{\partial x} \bigg), $$
-$$ \frac{\partial v_p}{\partial x} ( \Phi m_p + \Phi k\frac{T_p}{v_p^2}) = J_y B_z - \Phi k \frac{1}{v_p} \frac{\partial T_p}{\partial x}, $$
-$$ \frac{\partial v_p}{\partial x}  = \frac{ J_y B_z v_p^2 - \Phi k v_p \frac{\partial T_p}{\partial x}}{m_p \Phi v_p^2 + \Phi k T_p}. $$
+$$ \frac{\partial v_p}{\partial x} \bigg( \Phi m_p - \Phi k\frac{T_p}{v_p^2}\bigg) = J_y B_z - \Phi k \frac{1}{v_p} \frac{\partial T_p}{\partial x}, $$
+
+and solving this *together with* the stagnation-energy equation above (cross-checked with `sympy` -- see
+`tests/test_energy_accounting.py`) gives
+
+$$ \frac{\partial T_p}{\partial x} = \frac{\gamma-1}{k}\cdot\frac{S_\Omega m_p v_p^2 - k T_p (J_yB_zv_p + S_\Omega)}{\Phi(m_pv_p^2 - \gamma k T_p)}, $$
+
+$$ \frac{\partial v_p}{\partial x} = \frac{v_p\big(J_yB_zv_p - S_\Omega(\gamma-1)\big)}{\Phi(m_pv_p^2 - \gamma k T_p)}. $$
+
+The shared denominator $m_p v_p^2 - \gamma k T_p = m_p v_p^2(1 - 1/M^2)$ (with $M$ the ordinary, $\gamma$-based Mach
+number) is the classic Rayleigh-flow choking singularity at $M=1$: heat addition to subsonic flow drives it toward
+sonic, and the closed-form march above isn't valid past that point. `HallSolver.march` stops early (and marks
+`Channel.choked = True`) if the flow reaches $M=1$, rather than stepping through the singularity.
 
 
 ## Process
