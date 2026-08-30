@@ -3,7 +3,7 @@ from magnetohydrodynamics.thermophysics.gas_model import GasType
 from magnetohydrodynamics.ionization.seed_type import SeedType
 from magnetohydrodynamics.state.gas_state import GasState
 from magnetohydrodynamics.state.state import State
-from scipy.constants import constants
+from scipy import constants
 from dataclasses import dataclass
 
 

@@ -20,4 +20,9 @@ package = false
 python-preference = "only-managed"
 python-downloads = "auto"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
 

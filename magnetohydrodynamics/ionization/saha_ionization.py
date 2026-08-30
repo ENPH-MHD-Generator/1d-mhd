@@ -1,6 +1,6 @@
 from magnetohydrodynamics.ionization.ionization_model import IonizationModel
 from magnetohydrodynamics.ionization.seed_type import SeedType
-from scipy.constants import constants
+from scipy import constants
 from typing import Iterable
 import numpy as np
 

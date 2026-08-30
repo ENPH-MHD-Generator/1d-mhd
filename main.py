@@ -176,7 +176,7 @@ def main():
     num_slices = 200
 
     inlet_primary_gas_temperature = 2000  # K
-    inlet_primary_gas_pressure = 101.01e3  # Pa
+    inlet_primary_gas_pressure = 10.01e3  # Pa
     inlet_primary_gas_speed = 150.115  # m/s
     magnetic_field = 0.5  # T
     seed_gas_fraction = 6.18e-3
@@ -202,7 +202,7 @@ def main():
         seed_frac0=seed_gas_fraction
     )
     print(time.perf_counter() - t0)
-    exit()
+    # exit()
 
     x = out["x"]
     Ex = out["Ex"]

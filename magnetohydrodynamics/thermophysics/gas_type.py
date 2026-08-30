@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from scipy.constants import constants
+from scipy import constants
 
 
 @dataclass(frozen=True)
