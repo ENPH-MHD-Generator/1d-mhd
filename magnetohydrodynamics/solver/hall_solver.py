@@ -25,6 +25,27 @@ class Channel(Geometry):
     def __len__(self) -> int:
         return len(self.states)
 
+    def to_dict(self) -> dict:
+        """Flatten into the legacy main.py-shaped dict (used by analysis.summarize_performance and the UI)."""
+        current_x = np.array([state.current_density[0] for state in self.states])
+        current_y = np.array([state.current_density[1] for state in self.states])
+        return dict(
+            x=self.x,
+            u=self["flow_speed"],
+            Tp=self["gas_temperature"],
+            p=self["gas_pressure"],
+            np=self["gas_number_density"],
+            Te=self["electron_temperature"],
+            ne=self["electron_number_density"],
+            beta=self["hall_parameter"],
+            Jx=current_x,
+            Jy=current_y,
+            Ex=self["axial_electric_field"],
+            S_ohm=self["ohmic_power_density"],
+            S_load=self["load_power_density"],
+            eta_L=self.load_resistivity,
+        )
+
 
 class HallSolver:
     """

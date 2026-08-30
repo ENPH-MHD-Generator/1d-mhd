@@ -4,6 +4,8 @@ from .transport import MHDTransportModel, TransportModel
 from .state import State, GasState, IonizationState, Geometry
 from .plasma import Plasma
 from .solver import HallSolver, Channel
+from .analysis import summarize_performance, terminal_power
+from . import presets
 
 __all__ = [
     "SeedType",
@@ -21,4 +23,7 @@ __all__ = [
     "Plasma",
     "HallSolver",
     "Channel",
+    "summarize_performance",
+    "terminal_power",
+    "presets",
 ]

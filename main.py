@@ -3,70 +3,9 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-import magnetohydrodynamics as mhd
-
-
-def build_hall_solver() -> tuple[mhd.HallSolver, mhd.GasType]:
-    """Argon primary gas, caesium-seeded -- see Derivation.md."""
-    gas_type = mhd.GasType(name="Argon", molar_mass=39.948e-3, heat_capacity_ratio=5.0 / 3.0)
-    seed_type = mhd.SeedType(
-        name="Caesium",
-        ionization_potential=3.894,                           # eV
-        electron_neutral_cross_section=3.93994730526347e-21,  # m^2
-        degeneracy_ratio=1.0,
-    )
-    transport_model = mhd.MHDTransportModel(seed_type=seed_type, gas_type=gas_type)
-    ionization_model = mhd.LocalThermodynamicEquilibrium(seed_type=seed_type)
-    hall_solver = mhd.HallSolver(
-        gas_type=gas_type,
-        seed_type=seed_type,
-        transport_model=transport_model,
-        ionization_model=ionization_model,
-    )
-    return hall_solver, gas_type
-
-
-def operating_point() -> dict:
-    """Default operating point (see Derivation.md's worked example)."""
-    load_resistivity = 1.5 / 2 * 50 / 2 / 2 / 2 / 2 / 20  # Ohm * m
-    channel_area = 48e-3 * 48e-3  # 2in * 2in in meters
-    # channel_area = (8 / 100) * (8 / 100) # 1 cm x 1 cm
-    channel_length = 0.2  # m
-
-    return dict(
-        num_slices=200,
-        length=channel_length,
-        area=channel_area,
-        inlet_speed=150.115,          # m/s
-        inlet_pressure=10.01e3,       # Pa
-        inlet_gas_temperature=2000.0,  # K
-        magnetic_field=0.5,           # T
-        load_resistance=load_resistivity * channel_length / channel_area,
-        inlet_seed_fraction=6.18e-3,
-        # inlet_seed_fraction=0.00004166666667 * 1.12,
-    )
-
-
-def channel_to_dict(channel: mhd.Channel) -> dict:
-    """Flatten a solved Channel into the axial-profile dict the plotting/summary helpers expect."""
-    Jx = np.array([state.current_density[0] for state in channel.states])
-    Jy = np.array([state.current_density[1] for state in channel.states])
-    return dict(
-        x=channel.x,
-        u=channel["flow_speed"],
-        Tp=channel["gas_temperature"],
-        p=channel["gas_pressure"],
-        np=channel["gas_number_density"],
-        Te=channel["electron_temperature"],
-        ne=channel["electron_number_density"],
-        beta=channel["hall_parameter"],
-        Jx=Jx,
-        Jy=Jy,
-        Ex=channel["axial_electric_field"],
-        S_ohm=channel["ohmic_power_density"],
-        S_load=channel["load_power_density"],
-        eta_L=channel.load_resistivity,
-    )
+from magnetohydrodynamics.analysis import summarize_performance
+from magnetohydrodynamics.presets import build_default_hall_solver as build_hall_solver
+from magnetohydrodynamics.presets import default_operating_point as operating_point
 
 
 def main():
@@ -79,7 +18,7 @@ def main():
     print(time.perf_counter() - t0)
     # exit()
 
-    out = channel_to_dict(channel)
+    out = channel.to_dict()
 
     x = out["x"]
     Ex = out["Ex"]
@@ -173,53 +112,6 @@ def plot_results(out):
     plt.title("Primary Gas Variables: $n_p$, $v_p$, $p_p$")
     fig.tight_layout()
     plt.show()
-
-
-def summarize_performance(out, A, cp, m_p, gamma):
-    # This function wqs ChatGPT'd, probably check
-
-    x = out['x']
-    Tp = out['Tp']
-    u = out['u']
-    nparr = out['np']  # primary number density
-    p = out['p']
-    S_L = out['S_load']
-    S_Ohm = out['S_ohm']
-
-    # inlet/outlet states
-    Tp_in, Tp_out = Tp[0], Tp[-1]
-    u_in, u_out = u[0],  u[-1]
-    p_in, p_out = p[0],  p[-1]
-
-    # mass flow (constant area)
-    rho_in = m_p * nparr[0]
-    mdot = rho_in * u_in * A
-
-    # stagnation enthalpies (per unit mass)
-    h0_in = cp * Tp_in + 0.5 * u_in ** 2
-    h0_out = cp * Tp_out + 0.5 * u_out ** 2
-    dh0 = h0_in - h0_out
-
-    # Powers
-    PL = np.trapezoid(S_L, x) * A
-    POhm = np.trapezoid(S_Ohm, x) * A
-
-    # Ratios
-    enthalpy_extraction_ratio = dh0 / h0_in
-    chi_load = (PL / mdot) / h0_in
-    eta_electrical = PL / max(1e-30, (PL + POhm))
-
-    pressure_ratio = p_in / p_out
-    eta_isentropic = enthalpy_extraction_ratio / (1 - pressure_ratio ** (- (gamma - 1) / gamma))
-
-    return {
-        "mdot": mdot,
-        "h0_in": h0_in, "h0_out": h0_out, "dh0": dh0,
-        "PL": PL, "POhm": POhm,
-        "enthalpy_extraction_ratio": enthalpy_extraction_ratio,
-        "chi_load": chi_load, "eta_electrical": eta_electrical,
-        "pressure_ratio": pressure_ratio, "eta_isentropic": eta_isentropic
-    }
 
 
 if __name__ == "__main__":
