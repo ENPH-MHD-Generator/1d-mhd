@@ -5,6 +5,8 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 from skimage.measure import marching_cubes
 
+from magnetohydrodynamics.stability.stability_grid import VolumeGrid
+
 
 class StabilityBoundaryMesh:
     """Isosurface extraction and stable-direction geometry for a precomputed 3-D
@@ -13,12 +15,12 @@ class StabilityBoundaryMesh:
     both: the axes are what turn marching_cubes' fractional grid-index vertices into
     real (log10(seed_fraction), B0, Tp) coordinates."""
 
-    def __init__(self, grid: dict, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray):
+    def __init__(self, grid: VolumeGrid, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray):
         self._grid = grid
         self._seed_fraction_values = seed_fraction_values
         self._b0_values = b0_values
         self._tp_values = tp_values
-        self._margin_capped = np.clip(np.nan_to_num(grid["margin"], nan=0.0, posinf=1e6, neginf=0.0), 0.0, 1e6)
+        self._margin_capped = np.clip(np.nan_to_num(grid.margin, nan=0.0, posinf=1e6, neginf=0.0), 0.0, 1e6)
 
     def extract(self, level: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Marching-cubes isosurface (skimage.measure.marching_cubes) of the margin
@@ -50,7 +52,7 @@ class StabilityBoundaryMesh:
         real_tp = 10.0 ** np.interp(index_vertices[:, 2], np.arange(len(self._tp_values)), log_tp)
         vertices = np.stack([real_log_sf, real_b0, real_tp], axis=-1)
 
-        vertex_power = map_coordinates(self._grid["load_power_density"], index_vertices.T, order=1, mode="nearest")
+        vertex_power = map_coordinates(self._grid.load_power_density, index_vertices.T, order=1, mode="nearest")
         return vertices, faces, vertex_power
 
     def stable_direction_segments(

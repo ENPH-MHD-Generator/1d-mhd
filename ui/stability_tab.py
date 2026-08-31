@@ -29,8 +29,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from scipy import constants
 
+from magnetohydrodynamics.operating_point import OperatingPoint
 from magnetohydrodynamics.presets import build_default_hall_solver, default_gas_type, default_seed_type
-from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint, SeedDensityBounds, StabilityBoundaryMesh
+from magnetohydrodynamics.stability import EquilibriumSweep, SeedDensityBounds, StabilityBoundaryMesh
 
 COLOR_EXACT = "#111111"
 COLOR_ASYMPTOTIC = "#2ca02c"
@@ -50,7 +51,13 @@ class AxisSpec:
 # own (possibly user-customized) bounds instead of always using a fixed default range.
 AXES: dict[str, AxisSpec] = {
     "B0": AxisSpec(ui_key="magnetic_field", label="B₀ [T]", log=False, default=(0.1, 5.0), ui_to_op=lambda v: v),
-    "Tp": AxisSpec(ui_key="inlet_gas_temperature", label="T_p [K]", log=False, default=(500.0, 3000.0), ui_to_op=lambda v: v),
+    # Log-scale, 1-6000 K to match examples/stability_boundary_mesh.py's own
+    # VOLUME_TP_VALUES -- that's the validated reference sweep the "lower sheet"
+    # investigation ([[matched-load-loop-nonconvergence]]) was run against, and most of
+    # the interesting boundary structure lives below the linear 500-3000 K range this
+    # used to default to (confirmed: that narrower range finds only 19 mesh faces at
+    # resolution 32, vs. 1819 with this range at the same resolution).
+    "Tp": AxisSpec(ui_key="inlet_gas_temperature", label="T_p [K]", log=True, default=(1.0, 6000.0), ui_to_op=lambda v: v),
     "p0": AxisSpec(ui_key="inlet_pressure_kpa", label="p₀ [Pa]", log=True, default=(1e3, 1e5), ui_to_op=lambda v: v * 1e3),
     "v0": AxisSpec(ui_key="inlet_speed", label="v₀ [m/s]", log=False, default=(20.0, 500.0), ui_to_op=lambda v: v),
     "seed_fraction": AxisSpec(ui_key="seed_fraction_log10", label="seed fraction", log=True, default=(1e-5, 1e-1), ui_to_op=lambda v: 10.0 ** v),
@@ -174,73 +181,104 @@ def compute_seed_density_window(base: OperatingPoint, target_power_density: floa
 
 # --- Plotly figure builders (pure -- take already-computed arrays, no solving here).
 
-def plot_2d_boundary(data: dict, x_label: str, y_label: str, x_log: bool, y_log: bool, level: float, margin_cap: float = 2.0) -> go.Figure:
+def plot_2d_boundary(
+        data: dict, base: OperatingPoint, x_key: str, y_key: str,
+        x_label: str, y_label: str, x_log: bool, y_log: bool, level: float, margin_cap: float = 2.0,
+) -> go.Figure:
     grid, x_values, y_values = data["grid"], data["x_values"], data["y_values"]
-    margin_capped = np.clip(np.nan_to_num(grid["margin"], nan=0.0, posinf=margin_cap * 10, neginf=0.0), 0.0, margin_cap)
+    margin_capped = np.clip(np.nan_to_num(grid.margin, nan=0.0, posinf=margin_cap * 10, neginf=0.0), 0.0, margin_cap)
 
     fig = go.Figure()
     fig.add_trace(go.Contour(
         x=x_values, y=y_values, z=margin_capped,
         colorscale="RdBu", zmin=0.0, zmax=margin_cap,
-        contours=dict(start=0.0, end=margin_cap, size=margin_cap / 60.0),
+        # showlines=False: Contour's fill mode defaults to also stroking a line at
+        # every one of these 60 bands, which (at this size) buries the plot in thin
+        # black divider lines with no meaning of their own -- the two traces below
+        # already draw the one line that matters (the actual margin==level boundary).
+        contours=dict(start=0.0, end=margin_cap, size=margin_cap / 60.0, showlines=False),
         colorbar=dict(title="β_crit/β"),
     ))
     fig.add_trace(go.Contour(
-        x=x_values, y=y_values, z=grid["margin"], showscale=False,
+        x=x_values, y=y_values, z=grid.margin, showscale=False,
         contours=dict(coloring="lines", start=level, end=level, size=1.0),
         line=dict(color=COLOR_EXACT, width=2.5), name=f"exact (margin={level:g})",
     ))
     fig.add_trace(go.Contour(
-        x=x_values, y=y_values, z=grid["margin_asymptotic"], showscale=False,
+        x=x_values, y=y_values, z=grid.margin_asymptotic, showscale=False,
         contours=dict(coloring="lines", start=level, end=level, size=1.0),
         line=dict(color=COLOR_ASYMPTOTIC, width=2.0, dash="dash"), name=f"asymptotic (margin={level:g})",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[getattr(base, x_key)], y=[getattr(base, y_key)], mode="markers", name="current configuration",
+        marker=dict(color="red", size=13, symbol="circle", line=dict(color="white", width=1.5)),
     ))
     fig.update_xaxes(title=x_label, type="log" if x_log else "linear")
     fig.update_yaxes(title=y_label, type="log" if y_log else "linear")
     fig.update_layout(
         title=dict(text=f"Stability boundary: {x_label} vs. {y_label}", font=dict(size=13)),
         height=520, margin=dict(l=60, r=60, t=40, b=40),
+        # uirevision keyed on which axes are swept -- switching axes changes what's even
+        # being plotted, so THAT should reset zoom/pan, but a re-render at the same axis
+        # choice (e.g. triggered by a sidebar slider elsewhere) shouldn't discard it.
+        uirevision=f"{x_key}-{y_key}",
     )
     return fig
 
 
-def plot_load_resistivity_surface(data: dict) -> go.Figure:
+def plot_load_resistivity_surface(data: dict, base: OperatingPoint) -> go.Figure:
     log_sf = np.log10(data["sf_values"])
     lower, lower_power = data["lower"], data["lower_power"]
     log_power = np.where(np.isfinite(lower_power) & (lower_power > 0), np.log10(lower_power), np.nan)
 
-    fig = go.Figure(data=[go.Surface(
-        x=log_sf, y=data["b0_values"], z=np.log10(lower),
-        surfacecolor=log_power, colorscale="Plasma",
-        colorbar=dict(title="log10(S_L)<br>[W/m³]"),
-    )])
+    fig = go.Figure(data=[
+        go.Surface(
+            x=log_sf, y=data["b0_values"], z=np.log10(lower),
+            surfacecolor=log_power, colorscale="Plasma",
+            colorbar=dict(title="log10(S_L)<br>[W/m³]"),
+        ),
+        go.Scatter3d(
+            x=[np.log10(base.seed_fraction)], y=[base.B0], z=[np.log10(base.load_resistivity)],
+            mode="markers", name="current configuration",
+            marker=dict(color="red", size=6, symbol="circle", line=dict(color="white", width=1)),
+        ),
+    ])
     fig.update_layout(
         title=dict(text="Critical load resistivity η_L(B₀, seed fraction)", font=dict(size=13)),
         scene=dict(
             xaxis_title="log10(seed fraction)", yaxis_title="B₀ [T]", zaxis_title="log10(η_L [Ω·m])",
         ),
         height=560, margin=dict(l=0, r=0, t=40, b=0),
+        uirevision="surface",  # keep the camera's rotation/zoom across re-renders with new data
     )
     return fig
 
 
-def plot_mesh(data: dict) -> go.Figure | None:
+def plot_mesh(data: dict, base: OperatingPoint) -> go.Figure | None:
     vertices, faces, vertex_power = data["vertices"], data["faces"], data["vertex_power"]
     if len(vertices) == 0:
         return None
     safe_power = np.where(np.isfinite(vertex_power) & (vertex_power > 0), vertex_power, np.nan)
     log_power = np.log10(safe_power)
 
-    fig = go.Figure(data=[go.Mesh3d(
-        x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
-        i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
-        intensity=log_power, colorscale="Plasma", colorbar=dict(title="log10(S_L)<br>[W/m³]"),
-        opacity=1.0, flatshading=False,
-    )])
+    fig = go.Figure(data=[
+        go.Mesh3d(
+            x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            intensity=log_power, colorscale="Plasma", colorbar=dict(title="log10(S_L)<br>[W/m³]"),
+            opacity=1.0, flatshading=False,
+        ),
+        go.Scatter3d(
+            x=[np.log10(base.seed_fraction)], y=[base.B0], z=[base.Tp],
+            mode="markers", name="current configuration",
+            marker=dict(color="red", size=6, symbol="circle", line=dict(color="white", width=1)),
+        ),
+    ])
     fig.update_layout(
         title=dict(text=f"Stability boundary surface -- {len(faces):,} faces, drag to rotate", font=dict(size=13)),
         scene=dict(xaxis_title="log10(seed fraction)", yaxis_title="B₀ [T]", zaxis_title="T_p [K]"),
         height=600, margin=dict(l=0, r=0, t=40, b=0),
+        uirevision="mesh",  # keep the camera's rotation/zoom across re-renders with new data
     )
     return fig
 
@@ -254,6 +292,7 @@ def plot_seed_ceiling(data: dict) -> go.Figure:
     fig.update_layout(
         title=dict(text="Maximum allowable seed density at fixed T_e", font=dict(size=13)),
         height=420, margin=dict(l=60, r=60, t=40, b=40), hovermode="x unified",
+        uirevision="ceiling",  # keep zoom/pan across re-renders with new data
     )
     return fig
 
@@ -270,6 +309,7 @@ def plot_seed_window(data: dict) -> go.Figure:
         title=dict(text="Seed density window: stability ceiling (orange) vs. power floor (blue)", font=dict(size=13)),
         scene=dict(xaxis_title="T_e [K]", yaxis_title="β", zaxis_title="log10(seed fraction)"),
         height=560, margin=dict(l=0, r=0, t=40, b=0),
+        uirevision="window",  # keep the camera's rotation/zoom across re-renders with new data
     )
     return fig
 
@@ -300,11 +340,26 @@ def render(ui_values: dict) -> None:
         )
     target_power_density = target_power_mw * 1e6
 
-    sub_2d, sub_surface, sub_mesh, sub_window = st.tabs(
-        ["📐 2-D Boundary", "🌐 Load-Resistivity Surface", "🧊 3-D Mesh", "🪟 Seed-Density Window"]
+    # st.tabs() looked like the natural fit here, but its active-tab selection is purely
+    # frontend state that can reset to the first tab on a rerun triggered by an unrelated
+    # sidebar change -- a documented, currently-unresolved Streamlit limitation
+    # (https://github.com/streamlit/streamlit/issues/13341), confirmed against this exact
+    # app: even key + on_change="rerun" (which the docs suggest tracks tab state) did not
+    # survive an unrelated rerun when checked here. st.segmented_control is used instead
+    # as a tab-bar substitute -- a normal stateful widget whose value reliably persists in
+    # st.session_state across ANY rerun, the same guarantee a slider already has.
+    # required=True keeps exactly one option always selected, matching st.tabs()' own
+    # behavior. Trade-off: unlike st.tabs() (which computes every tab's content on every
+    # rerun), only the SELECTED section's body runs below -- a deliberate bonus, not a side
+    # effect: the other three sub-tabs' computations (see [[stability-performance-profiling]]
+    # for how much some of them cost) no longer run at all while hidden.
+    SUB_TAB_LABELS = ["📐 2-D Boundary", "🌐 Load-Resistivity Surface", "🧊 3-D Mesh", "🪟 Seed-Density Window"]
+    active_sub_tab = st.segmented_control(
+        "Stability view", SUB_TAB_LABELS, default=SUB_TAB_LABELS[0], required=True,
+        key="stability_sub_tab", label_visibility="collapsed",
     )
 
-    with sub_2d:
+    if active_sub_tab == "📐 2-D Boundary":
         axis_options = list(AXES)
 
         def axis_label(key: str) -> str:
@@ -323,23 +378,25 @@ def render(ui_values: dict) -> None:
             y_bounds = axis_bounds(y_key, use_default_bounds)
             data = compute_2d_grid(base, ionization_potential, x_key, x_bounds, y_key, y_bounds, resolution=90)
             st.plotly_chart(
-                plot_2d_boundary(data, AXES[x_key].label, AXES[y_key].label, AXES[x_key].log, AXES[y_key].log, margin_level),
+                plot_2d_boundary(
+                    data, base, x_key, y_key, AXES[x_key].label, AXES[y_key].label, AXES[x_key].log, AXES[y_key].log, margin_level,
+                ),
                 width="stretch", key="plot_stability_2d",
             )
 
-    with sub_surface:
+    if active_sub_tab == "🌐 Load-Resistivity Surface":
         sf_bounds = axis_bounds("seed_fraction", use_default_bounds)
         b0_bounds = axis_bounds("B0", use_default_bounds)
         data = compute_load_resistivity_surface(base, ionization_potential, margin_level, sf_bounds, b0_bounds, resolution=22)
-        st.plotly_chart(plot_load_resistivity_surface(data), width="stretch", key="plot_stability_surface")
+        st.plotly_chart(plot_load_resistivity_surface(data, base), width="stretch", key="plot_stability_surface")
         st.caption("Everything above the surface has higher load resistivity than critical -- more stable.")
 
-    with sub_mesh:
+    if active_sub_tab == "🧊 3-D Mesh":
         sf_bounds = axis_bounds("seed_fraction", use_default_bounds)
         b0_bounds = axis_bounds("B0", use_default_bounds)
         tp_bounds = axis_bounds("Tp", use_default_bounds)
-        data = compute_mesh(base, ionization_potential, margin_level, sf_bounds, b0_bounds, tp_bounds, resolution=32)
-        fig = plot_mesh(data)
+        data = compute_mesh(base, ionization_potential, margin_level, sf_bounds, b0_bounds, tp_bounds, resolution=45)
+        fig = plot_mesh(data, base)
         if fig is None:
             st.info(
                 f"No boundary found at margin = {margin_level:g} within the swept (seed fraction, B₀, T_p) "
@@ -353,7 +410,7 @@ def render(ui_values: dict) -> None:
             "matplotlib version (examples/stability_boundary_mesh.py) needs."
         )
 
-    with sub_window:
+    if active_sub_tab == "🪟 Seed-Density Window":
         data = compute_seed_density_window(base, target_power_density, margin_level)
         wc1, wc2 = st.columns(2)
         with wc1:

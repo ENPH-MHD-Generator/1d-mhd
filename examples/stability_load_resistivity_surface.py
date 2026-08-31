@@ -17,8 +17,9 @@ import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the '3d' projection
 from plotting_utils import STABILITY_NOTE, draw_stable_direction_markers, fixed_params_text, parse_show_save_args, save_and_show
 
-from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
-from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint
+from magnetohydrodynamics.operating_point import OperatingPoint
+from magnetohydrodynamics.presets import build_default_hall_solver, default_channel_operating_point, default_seed_type
+from magnetohydrodynamics.stability import EquilibriumSweep
 
 
 def plot_critical_load_resistivity_surface(
@@ -93,7 +94,7 @@ def plot_critical_load_resistivity_surface(
 def main() -> None:
     args = parse_show_save_args(__doc__)
     hall_solver, _ = build_default_hall_solver()
-    base = OperatingPoint.default()
+    base = default_channel_operating_point()
     sweep = EquilibriumSweep(hall_solver, base, default_seed_type().ionization_potential)
 
     seed_fraction_values = np.logspace(-5, -1, 25)

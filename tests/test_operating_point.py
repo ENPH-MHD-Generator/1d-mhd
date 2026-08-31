@@ -1,8 +1,7 @@
 """
-operating_point.py had no test coverage before this file (it's newly extracted from
-examples/stability_boundary.py). OperatingPoint.default() is a thin wrapper over
-presets.default_operating_point(), and OperatingPoint.resolve() is the ideal-gas-law
-unit conversion every sweep in this package depends on -- both worth pinning down
+OperatingPoint.resolve() is the ideal-gas-law unit conversion every sweep in
+magnetohydrodynamics.stability depends on, and default_channel_operating_point() is a
+thin wrapper over presets.default_operating_point() -- both worth pinning down
 directly.
 """
 import dataclasses
@@ -10,13 +9,13 @@ import dataclasses
 import pytest
 from scipy import constants
 
-from magnetohydrodynamics.presets import default_operating_point
-from magnetohydrodynamics.stability.operating_point import OperatingPoint
+from magnetohydrodynamics.operating_point import OperatingPoint
+from magnetohydrodynamics.presets import default_channel_operating_point, default_operating_point
 
 
 def test_default_matches_default_operating_point():
     params = default_operating_point()
-    base = OperatingPoint.default()
+    base = default_channel_operating_point()
     assert params["magnetic_field"] == base.B0
     assert base.Tp == params["inlet_gas_temperature"]
     assert base.p0 == params["inlet_pressure"]
@@ -31,12 +30,12 @@ def test_resolve_derives_number_densities_from_ideal_gas_law():
     point = base.resolve()
 
     expected_gas_number_density = base.p0 / (constants.k * base.Tp)
-    assert point["gas_number_density"] == pytest.approx(expected_gas_number_density)
-    assert point["seed_number_density"] == pytest.approx(base.seed_fraction * expected_gas_number_density)
-    assert point["flow_speed"] == base.v0
-    assert point["gas_temperature"] == base.Tp
-    assert point["magnetic_field"] == base.B0
-    assert point["load_resistivity"] == base.load_resistivity
+    assert point.gas_number_density == pytest.approx(expected_gas_number_density)
+    assert point.seed_number_density == pytest.approx(base.seed_fraction * expected_gas_number_density)
+    assert point.flow_speed == base.v0
+    assert point.gas_temperature == base.Tp
+    assert point.magnetic_field == base.B0
+    assert point.load_resistivity == base.load_resistivity
 
 
 def test_resolve_override_recomputes_dependent_densities():
@@ -47,15 +46,15 @@ def test_resolve_override_recomputes_dependent_densities():
     baseline = base.resolve()
     overridden = base.resolve(Tp=4000.0)
 
-    assert overridden["gas_temperature"] == 4000.0
-    assert overridden["gas_number_density"] == pytest.approx(base.p0 / (constants.k * 4000.0))
-    assert overridden["gas_number_density"] != pytest.approx(baseline["gas_number_density"])
+    assert overridden.gas_temperature == 4000.0
+    assert overridden.gas_number_density == pytest.approx(base.p0 / (constants.k * 4000.0))
+    assert overridden.gas_number_density != pytest.approx(baseline.gas_number_density)
 
 
 def test_resolve_applies_a_single_override():
     base = OperatingPoint(B0=0.5, Tp=2000.0, p0=10.0e3, v0=150.0, seed_fraction=6.18e-3, load_resistivity=0.5)
     point = base.resolve(B0=3.5)
-    assert point["magnetic_field"] == 3.5
+    assert point.magnetic_field == 3.5
 
 
 def test_resolve_rejects_an_unknown_field_name():

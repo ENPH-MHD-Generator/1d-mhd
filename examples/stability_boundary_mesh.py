@@ -18,8 +18,9 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the '3d' proj
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from plotting_utils import STABILITY_NOTE, fixed_params_text, parse_show_save_args, save_and_show
 
-from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
-from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint, StabilityBoundaryMesh
+from magnetohydrodynamics.operating_point import OperatingPoint
+from magnetohydrodynamics.presets import build_default_hall_solver, default_channel_operating_point, default_seed_type
+from magnetohydrodynamics.stability import EquilibriumSweep, StabilityBoundaryMesh
 
 # Shared between the static matplotlib figure and the optional interactive Plotly
 # export, so both describe the same grid without repeating the resolution/range
@@ -153,7 +154,7 @@ def plot_stability_boundary_mesh_interactive(
 def main() -> None:
     args = parse_show_save_args(__doc__)
     hall_solver, _ = build_default_hall_solver()
-    base = OperatingPoint.default()
+    base = default_channel_operating_point()
     sweep = EquilibriumSweep(hall_solver, base, default_seed_type().ionization_potential)
 
     volume = sweep.volume_grid(VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES)

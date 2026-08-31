@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 from scipy import constants
-from scipy.optimize import brentq
 
 from magnetohydrodynamics.ionization.saha_ionization import LocalThermodynamicEquilibrium
 from magnetohydrodynamics.ionization.seed_type import SeedType
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergAsymptoticCriterion
 from magnetohydrodynamics.thermophysics.gas_type import GasType
 from magnetohydrodynamics.transport.mhd_transport_model import MHDTransportModel
+from magnetohydrodynamics.typing import Scalar
 
 
 class SeedDensityBounds:
@@ -30,16 +30,62 @@ class SeedDensityBounds:
         self._transport_model = MHDTransportModel(seed_type=seed_type, gas_type=gas_type)
         self._criterion = FriedbergAsymptoticCriterion()
 
-    def _ceiling_margin_minus_level(self, seed_number_density: float, electron_temperature: float, beta: float, level: float) -> float:
-        """Shared by `ceiling` and `min_max_window`: at fixed Te and beta,
-        beta_crit_asymptotic(n_s)/beta - level. `gas_temperature` is passed as NaN --
-        FriedbergAsymptoticCriterion ignores it, and NaN makes that explicit rather
-        than passing a real-looking value that isn't actually used. `level`
+    def _ceiling_margin_minus_level(self, seed_number_density: Scalar, electron_temperature: Scalar, beta: Scalar, level: float) -> Scalar:
+        """Shared by `ceiling`/`min_max_window` (via `_bisect_ceiling`): at fixed Te and
+        beta, beta_crit_asymptotic(n_s)/beta - level. `gas_temperature` is passed as
+        NaN -- FriedbergAsymptoticCriterion ignores it, and NaN makes that explicit
+        rather than passing a real-looking value that isn't actually used. `level`
         generalizes past marginal stability (1.0, the default) the same way
-        EquilibriumSweep.margin_minus_level does -- see its docstring."""
+        EquilibriumSweep.margin_minus_level does -- see its docstring. Elementwise, so
+        `seed_number_density`/`electron_temperature`/`beta` may be scalars or
+        broadcastable arrays -- `_bisect_ceiling` calls this with whole grids."""
         f_I = self._ionization_model.get_electron_density(electron_temperature, seed_number_density) / seed_number_density
         beta_crit = self._criterion.critical_hall_parameter(electron_temperature, np.nan, self._seed_type.ionization_potential, f_I)
-        return float(beta_crit) / beta - level
+        return beta_crit / beta - level
+
+    def _bisect_ceiling(
+            self, electron_temperature_values: np.ndarray, beta_values: np.ndarray,
+            level: float, ns_bracket: tuple[float, float], iters: int = 60,
+    ) -> np.ndarray:
+        """Vectorized log-space bisection for the seed-density ceiling, over the full
+        (Te, beta) grid at once -- the same approach as
+        EquilibriumSweep.matched_load, applicable here for the same reason: at fixed
+        (Te, beta), `_ceiling_margin_minus_level` has (verified numerically, see
+        `ceiling`'s docstring) exactly one root in n_s, since beta_crit_asymptotic(n_s)
+        is monotonic. This used to be a per-(Te, beta) Python loop calling
+        `scipy.optimize.brentq` once per cell (with a try/except RuntimeError/ValueError
+        around each) -- profiled as this module's dominant cost (~1000s of scalar
+        HallSolver-adjacent calls for a modest grid) well out of proportion to the
+        actual amount of math involved; one vectorized bisection over the whole grid
+        removes essentially all of that Python-level overhead.
+
+        Unlike `matched_load`, this doesn't assume which endpoint is positive (that
+        wasn't asserted anywhere for this criterion) -- each bisection step compares
+        the midpoint's sign against `ns_bracket[0]`'s own sign instead of a hardcoded
+        one, so it stays correct regardless of whether the root-finder function happens
+        to be increasing or decreasing in n_s.
+
+        Returns a 2-D array of shape (len(electron_temperature_values),
+        len(beta_values)), NaN wherever `ns_bracket`'s endpoints don't actually
+        sign-change (checked once, vectorized, in place of the old per-cell
+        try/except)."""
+        Te, beta = np.meshgrid(electron_temperature_values, beta_values, indexing="ij")
+        lo, hi = ns_bracket
+        f_lo = self._ceiling_margin_minus_level(np.full_like(Te, lo), Te, beta, level)
+        f_hi = self._ceiling_margin_minus_level(np.full_like(Te, hi), Te, beta, level)
+        valid = np.sign(f_lo) != np.sign(f_hi)
+        positive_at_lo = f_lo > 0.0
+
+        log_lo = np.full_like(Te, np.log10(lo))
+        log_hi = np.full_like(Te, np.log10(hi))
+        for _ in range(iters):
+            log_mid = 0.5 * (log_lo + log_hi)
+            ns_mid = 10.0 ** log_mid
+            positive = self._ceiling_margin_minus_level(ns_mid, Te, beta, level) > 0.0
+            go_high = positive == positive_at_lo  # sign(mid) matches sign(lo) => root is in [mid, hi]
+            log_lo = np.where(go_high, log_mid, log_lo)
+            log_hi = np.where(go_high, log_hi, log_mid)
+        return np.where(valid, 10.0 ** (0.5 * (log_lo + log_hi)), np.nan)
 
     def ceiling(
             self, electron_temperature_values: np.ndarray, beta_values: np.ndarray, reference_gas_number_density: float,
@@ -72,16 +118,7 @@ class SeedDensityBounds:
         `reference_gas_number_density` -- purely for display alongside other
         seed-fraction plots; this analysis has no actual primary-gas dependence (Tp,
         p0 don't enter it at all)."""
-        shape = (len(electron_temperature_values), len(beta_values))
-        ceiling_ns = np.full(shape, np.nan)
-        lo, hi = ns_bracket
-        for i, Te in enumerate(electron_temperature_values):
-            for j, beta in enumerate(beta_values):
-                try:
-                    if np.sign(self._ceiling_margin_minus_level(lo, Te, beta, level)) != np.sign(self._ceiling_margin_minus_level(hi, Te, beta, level)):
-                        ceiling_ns[i, j] = brentq(self._ceiling_margin_minus_level, lo, hi, args=(Te, beta, level), xtol=1.0)
-                except (ValueError, RuntimeError):
-                    pass
+        ceiling_ns = self._bisect_ceiling(electron_temperature_values, beta_values, level, ns_bracket)
         return ceiling_ns / reference_gas_number_density
 
     def min_max_window(
@@ -118,21 +155,15 @@ class SeedDensityBounds:
         solution leads to specific values for the electron temperature and seed
         density." Returns (max_ns, min_ne), both as absolute number densities [m^-3]
         (divide by a reference n_p for a seed-fraction-like ratio)."""
-        shape = (len(electron_temperature_values), len(beta_values))
-        max_ns = np.full(shape, np.nan)
-        min_ne = np.full(shape, np.nan)
-        lo, hi = ns_bracket
-        for i, Te in enumerate(electron_temperature_values):
-            nu_M = self._transport_model.get_momentum_transfer_frequency(Te, reference_gas_number_density)
-            for j, beta in enumerate(beta_values):
-                try:
-                    if np.sign(self._ceiling_margin_minus_level(lo, Te, beta, level)) != np.sign(self._ceiling_margin_minus_level(hi, Te, beta, level)):
-                        max_ns[i, j] = brentq(self._ceiling_margin_minus_level, lo, hi, args=(Te, beta, level), xtol=1.0)
-                except (ValueError, RuntimeError):
-                    pass
-                s = np.sqrt(1.0 + beta ** 2)
-                min_ne[i, j] = (
-                    target_power_density * s * (s + 1.0) ** 2
-                    / (constants.electron_mass * nu_M * reference_flow_speed ** 2 * beta ** 4)
-                )
+        max_ns = self._bisect_ceiling(electron_temperature_values, beta_values, level, ns_bracket)
+
+        Te, beta = np.meshgrid(electron_temperature_values, beta_values, indexing="ij")
+        # nu_M depends on Te only -- broadcasting it across the full (Te, beta) grid (rather
+        # than computing it once per Te row, as the old per-cell loop did) is harmless.
+        nu_M = self._transport_model.get_momentum_transfer_frequency(Te, reference_gas_number_density)
+        s = np.sqrt(1.0 + beta ** 2)
+        min_ne = (
+            target_power_density * s * (s + 1.0) ** 2
+            / (constants.electron_mass * nu_M * reference_flow_speed ** 2 * beta ** 4)
+        )
         return max_ns, min_ne

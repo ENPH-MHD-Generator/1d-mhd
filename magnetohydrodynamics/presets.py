@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from magnetohydrodynamics.ionization.saha_ionization import LocalThermodynamicEquilibrium
 from magnetohydrodynamics.ionization.seed_type import SeedType
+from magnetohydrodynamics.operating_point import OperatingPoint
 from magnetohydrodynamics.solver.hall_solver import HallSolver
 from magnetohydrodynamics.thermophysics.gas_type import GasType
 from magnetohydrodynamics.transport.mhd_transport_model import MHDTransportModel
@@ -89,4 +90,21 @@ def default_operating_point() -> dict:
         magnetic_field=0.5,            # T
         load_resistance=load_resistivity * channel_length / channel_area,
         inlet_seed_fraction=6.18e-3,
+    )
+
+
+def default_channel_operating_point() -> OperatingPoint:
+    """default_operating_point(), expressed as the six physical-knob OperatingPoint
+    fields a stability sweep varies (used to be an OperatingPoint.default() classmethod
+    -- moved here, not there, so OperatingPoint itself can stay a dependency-free leaf
+    type; this is the one place that both this module's dict shape and OperatingPoint's
+    shape need to agree)."""
+    params = default_operating_point()
+    return OperatingPoint(
+        B0=params["magnetic_field"],
+        Tp=params["inlet_gas_temperature"],
+        p0=params["inlet_pressure"],
+        v0=params["inlet_speed"],
+        seed_fraction=params["inlet_seed_fraction"],
+        load_resistivity=params["load_resistance"] * params["area"] / params["length"],
     )

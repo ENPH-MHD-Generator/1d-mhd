@@ -14,7 +14,7 @@ from pathlib import Path
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 
-from magnetohydrodynamics.stability import OperatingPoint
+from magnetohydrodynamics.operating_point import OperatingPoint
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 

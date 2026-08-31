@@ -10,9 +10,9 @@ single-point "grid" agrees with calling those two pieces directly.
 import numpy as np
 import pytest
 
+from magnetohydrodynamics.operating_point import OperatingPoint
 from magnetohydrodynamics.stability.equilibrium_sweep import EquilibriumSweep
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergCriterion
-from magnetohydrodynamics.stability.operating_point import OperatingPoint
 
 
 @pytest.fixture
@@ -31,25 +31,25 @@ class TestGrid:
         y_values = np.linspace(500.0, 3000.0, 3)
         grid = sweep.grid("B0", x_values, "Tp", y_values)
         for key in ("beta", "beta_crit", "beta_crit_asymptotic", "margin", "margin_asymptotic", "Te", "ionization_fraction", "stable"):
-            assert grid[key].shape == (3, 4)
+            assert getattr(grid, key).shape == (3, 4)
 
     def test_single_point_matches_direct_solve_and_criterion(self, hall_solver, base, seed_type, sweep: EquilibriumSweep):
         grid = sweep.grid("B0", np.array([0.5]), "Tp", np.array([2000.0]))
 
         point = base.resolve()
-        expected_result = hall_solver.solve_equilibrium_batch(**point)
-        expected_fI = expected_result["electron_number_density"] / expected_result["seed_number_density"]
+        expected_result = hall_solver.solve_equilibrium_batch(**point.as_kwargs())
+        expected_fI = expected_result.electron_number_density / expected_result.seed_number_density
         expected_beta_crit = FriedbergCriterion().critical_hall_parameter(
-            expected_result["electron_temperature"], base.Tp, seed_type.ionization_potential, expected_fI,
+            expected_result.electron_temperature, base.Tp, seed_type.ionization_potential, expected_fI,
         )
 
-        assert grid["Te"][0, 0] == pytest.approx(float(expected_result["electron_temperature"]))
-        assert grid["beta_crit"][0, 0] == pytest.approx(float(expected_beta_crit))
-        assert grid["stable"][0, 0] == (grid["margin"][0, 0] >= 1.0)
+        assert grid.Te[0, 0] == pytest.approx(float(expected_result.electron_temperature))
+        assert grid.beta_crit[0, 0] == pytest.approx(float(expected_beta_crit))
+        assert grid.stable[0, 0] == (grid.margin[0, 0] >= 1.0)
 
     def test_margin_ge_one_matches_stable_flag(self, sweep: EquilibriumSweep):
         grid = sweep.grid("B0", np.linspace(0.1, 5.0, 6), "seed_fraction", np.logspace(-5, -1, 6))
-        np.testing.assert_array_equal(grid["stable"], grid["margin"] >= 1.0)
+        np.testing.assert_array_equal(grid.stable, grid.margin >= 1.0)
 
 
 class TestMatchedLoad:
@@ -60,7 +60,7 @@ class TestMatchedLoad:
         seed_fraction, magnetic_field, gas_temperature = 2e-4, 1.7, 18.0
         result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=49)
         one_more = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=50)
-        assert float(result["hall_parameter"]) == pytest.approx(float(one_more["hall_parameter"]), rel=1e-6)
+        assert float(result.hall_parameter) == pytest.approx(float(one_more.hall_parameter), rel=1e-6)
 
     def test_converges_at_a_point_that_used_to_settle_into_a_period_2_cycle(self, sweep: EquilibriumSweep):
         """This exact point used to be a counterexample: the old Picard-iteration
@@ -71,7 +71,7 @@ class TestMatchedLoad:
         seed_fraction, magnetic_field, gas_temperature = 6.18e-3, 0.5, 2000.0
         result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=49)
         one_more = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=50)
-        assert float(result["hall_parameter"]) == pytest.approx(float(one_more["hall_parameter"]), rel=1e-4)
+        assert float(result.hall_parameter) == pytest.approx(float(one_more.hall_parameter), rel=1e-4)
 
     def test_converges_broadly_across_a_grid_that_used_to_be_half_non_convergent(self, sweep: EquilibriumSweep):
         """The old Picard-iteration version failed to converge at ~50% of points on a
@@ -85,13 +85,13 @@ class TestMatchedLoad:
 
         result = sweep.matched_load(SF, B0, TP, iters=49)
         one_more = sweep.matched_load(SF, B0, TP, iters=50)
-        relative_difference = np.abs(result["hall_parameter"] - one_more["hall_parameter"]) / np.abs(one_more["hall_parameter"])
+        relative_difference = np.abs(result.hall_parameter - one_more.hall_parameter) / np.abs(one_more.hall_parameter)
         assert np.max(relative_difference) < 1e-3
 
     def test_broadcasts_over_array_inputs(self, sweep: EquilibriumSweep):
         seed_fraction = np.array([1e-4, 1e-3, 1e-2])
         result = sweep.matched_load(seed_fraction=seed_fraction, magnetic_field=0.5, gas_temperature=2000.0)
-        assert result["hall_parameter"].shape == (3,)
+        assert np.asarray(result.hall_parameter).shape == (3,)
 
 
 class TestVolumeGrid:
@@ -101,11 +101,11 @@ class TestVolumeGrid:
         tp_values = np.logspace(2.0, 3.5, 5)
         grid = sweep.volume_grid(seed_fraction_values, b0_values, tp_values)
         for key in ("margin", "stable", "Te", "ionization_fraction", "load_power_density"):
-            assert grid[key].shape == (3, 4, 5)
+            assert getattr(grid, key).shape == (3, 4, 5)
 
     def test_stable_flag_matches_margin(self, sweep: EquilibriumSweep):
         grid = sweep.volume_grid(np.logspace(-5, -1, 3), np.linspace(0.1, 5.0, 3), np.logspace(2.0, 3.5, 3))
-        np.testing.assert_array_equal(grid["stable"], grid["margin"] >= 1.0)
+        np.testing.assert_array_equal(grid.stable, grid.margin >= 1.0)
 
 
 class TestMarginMinusLevel:
@@ -113,10 +113,10 @@ class TestMarginMinusLevel:
         value = sweep.margin_minus_level(1.0, B0=0.5)
 
         point = base.resolve(B0=0.5)
-        result = hall_solver.solve_equilibrium_batch(**point)
-        fI = result["electron_number_density"] / result["seed_number_density"]
+        result = hall_solver.solve_equilibrium_batch(**point.as_kwargs())
+        fI = result.electron_number_density / result.seed_number_density
         expected_margin = FriedbergCriterion().stability_margin(
-            result["hall_parameter"], result["electron_temperature"], point["gas_temperature"], seed_type.ionization_potential, fI,
+            result.hall_parameter, result.electron_temperature, point.gas_temperature, seed_type.ionization_potential, fI,
         )
         assert float(value) == pytest.approx(float(expected_margin) - 1.0)
 
@@ -132,38 +132,6 @@ class TestMarginMinusLevel:
         b0 = np.array([0.2, 0.5, 1.0])
         values = np.asarray(sweep.margin_minus_level(1.0, B0=b0))
         assert values.shape == (3,)
-
-
-class TestFindCrossings:
-    def test_finds_a_single_crossing(self):
-        # Root at 5.3, deliberately not on a grid point -- landing exactly on one would
-        # make np.sign(0) register as a sign change on both neighboring intervals.
-        axis = np.linspace(0.0, 10.0, 11)
-        values = axis - 5.3
-        roots = EquilibriumSweep.find_crossings(values, axis, objective=lambda x: x - 5.3)
-        assert len(roots) == 1
-        assert roots[0] == pytest.approx(5.3, abs=1e-4)
-
-    def test_finds_a_stability_window_with_two_crossings(self):
-        """unstable-stable-unstable: two crossings, not zero -- checking only the
-        endpoints (both negative here) would have missed both. Roots at 3.3/7.3,
-        deliberately off-grid -- see test_finds_a_single_crossing's comment."""
-        axis = np.linspace(0.0, 10.0, 11)
-
-        def objective(x):
-            return -(x - 3.3) * (x - 7.3)
-
-        values = objective(axis)
-        roots = EquilibriumSweep.find_crossings(values, axis, objective)
-        assert len(roots) == 2
-        assert roots[0] == pytest.approx(3.3, abs=1e-4)
-        assert roots[1] == pytest.approx(7.3, abs=1e-4)
-
-    def test_no_crossings_returns_empty_list(self):
-        axis = np.linspace(0.0, 10.0, 11)
-        values = axis + 1.0  # always positive, never crosses zero
-        roots = EquilibriumSweep.find_crossings(values, axis, objective=lambda x: x + 1.0)
-        assert roots == []
 
 
 class TestCriticalLoadResistivitySurface:
@@ -199,3 +167,23 @@ class TestCriticalLoadResistivitySurface:
         both_found = np.isfinite(lower_default) & np.isfinite(lower_buffered)
         assert both_found.any()
         assert np.all(lower_buffered[both_found] >= lower_default[both_found])
+
+    def test_detects_a_genuine_stability_window(self, sweep: EquilibriumSweep, monkeypatch):
+        """A real unstable-stable-unstable window (`upper` distinct from `lower`) isn't
+        observed anywhere in this codebase's actual physics (see the method's own
+        docstring) -- so the "find the first AND last sign change, not just the first"
+        logic is exercised here against a synthetic margin_minus_level standing in for
+        the real one, the same way the deleted find_crossings unit tests did before
+        this method's vectorized-bisection rewrite folded that logic in directly."""
+        log_lo, log_hi = 1.0, 2.0  # roots at load_resistivity = 10, 100
+
+        def fake_margin_minus_level(self, level, **overrides):
+            log_lr = np.log10(np.asarray(overrides["load_resistivity"], dtype=float))
+            return -(log_lr - log_lo) * (log_lr - log_hi)  # negative outside [log_lo, log_hi], positive inside
+
+        monkeypatch.setattr(EquilibriumSweep, "margin_minus_level", fake_margin_minus_level)
+        lower, upper, _lower_power, _upper_power = sweep.critical_load_resistivity_surface(
+            np.array([1e-3]), np.array([1.0]), load_resistivity_bracket=(1.0, 1000.0), scan_points=30,
+        )
+        assert lower[0, 0] == pytest.approx(10.0, rel=1e-3)
+        assert upper[0, 0] == pytest.approx(100.0, rel=1e-3)

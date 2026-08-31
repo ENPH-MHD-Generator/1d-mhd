@@ -363,15 +363,24 @@ def profile_hall_parameter(out: dict) -> go.Figure:
     return plot_single_axis(out["x"], [("β", out["beta"], COLOR_PURPLE, "solid")], "Hall Parameter Along the Channel", "β [-]")
 
 
+def compute_stability_margin(out: dict, ionization_potential: float) -> tuple[np.ndarray, np.ndarray]:
+    """beta_crit/beta at every slice the march visited, both the exact (5.13) and
+    high-ionisation asymptotic (6.23) criteria -- shared by profile_stability_margin
+    (the full profile plot) and the Performance section's summary metric (its
+    minimum along the channel)."""
+    exact = FriedbergCriterion()
+    asymptotic = FriedbergAsymptoticCriterion()
+    margin = exact.stability_margin(out["beta"], out["Te"], out["Tp"], ionization_potential, out["f_I"])
+    margin_asymptotic = asymptotic.stability_margin(out["beta"], out["Te"], out["Tp"], ionization_potential, out["f_I"])
+    return margin, margin_asymptotic
+
+
 def profile_stability_margin(out: dict, ionization_potential: float) -> go.Figure:
     """Velikhov-ionisation stability margin beta_crit/beta at every slice the march
     visited (magnetohydrodynamics.stability -- see examples/channel_profile.py for
     the matplotlib counterpart this mirrors). Log-scaled: the margin routinely spans
     several orders of magnitude along one channel."""
-    exact = FriedbergCriterion()
-    asymptotic = FriedbergAsymptoticCriterion()
-    margin = exact.stability_margin(out["beta"], out["Te"], out["Tp"], ionization_potential, out["f_I"])
-    margin_asymptotic = asymptotic.stability_margin(out["beta"], out["Te"], out["Tp"], ionization_potential, out["f_I"])
+    margin, margin_asymptotic = compute_stability_margin(out, ionization_potential)
     fig = plot_single_axis(
         out["x"],
         [("exact (5.13)", margin, COLOR_BLUE, "solid"), ("asymptotic (6.23)", margin_asymptotic, COLOR_GREEN, "dash")],
@@ -516,12 +525,28 @@ inlet = channel.states[0]
 seed_fraction = 10.0 ** ui_values["seed_fraction_log10"]
 seed_number_density = seed_fraction * out["np"]  # n_s(x) = seed_fraction * n_p(x), constant-area march
 
+stability_margin, _stability_margin_asymptotic = compute_stability_margin(out, default_seed_type().ionization_potential)
+min_stability_margin = float(np.min(stability_margin))
+if min_stability_margin <= 1.0:
+    margin_dot = "🔴"
+elif min_stability_margin <= 50.0:
+    margin_dot = "🟠"
+else:
+    margin_dot = "🟢"
+
 st.subheader("Performance")
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Load power P_L", f"{perf['PL']:.1f} W")
 m2.metric("Electrical efficiency", f"{perf['eta_electrical'] * 100:.1f} %")
 m3.metric("Isentropic efficiency", f"{perf['eta_isentropic'] * 100:.1f} %")
 m4.metric("Enthalpy extraction ratio", f"{perf['enthalpy_extraction_ratio'] * 100:.1f} %")
+m5.metric(
+    f"{margin_dot} Min stability margin", f"{min_stability_margin:.3g}",
+    help="Velikhov-ionisation marginal-stability ratio β_crit/β (exact criterion, eq. 5.13), minimum along the "
+         "whole channel -- see the Profiles tab's own plot for the full profile, and the Stability tab to explore "
+         "it away from this exact operating point. ≤1 = unstable somewhere in the channel (🔴); "
+         "1-50 = stable, but with little margin (🟠); >50 = comfortably stable (🟢).",
+)
 
 if channel.choked:
     st.warning(
@@ -531,11 +556,26 @@ if channel.choked:
         "load resistivity, or seed fraction to push the choke point further down the channel."
     )
 
-tab_profiles, tab_inlet, tab_stability, tab_optimize, tab_multi, tab_compare = st.tabs(
-    ["📈 Profiles", "🔎 Inlet Summary", "🛡️ Stability", "🎯 Optimize", "🧬 Multi-Optimize", "🆚 Compare"]
+# st.tabs() looked like the natural fit here, but its active-tab selection is purely
+# frontend state that can reset to the first tab on a rerun triggered by an unrelated
+# sidebar change -- especially likely here since the choked-flow st.warning right above
+# conditionally appears/disappears, shifting the element tree these sit in. This is a
+# documented, currently-unresolved Streamlit limitation
+# (https://github.com/streamlit/streamlit/issues/13341); even key + on_change="rerun"
+# (which the docs suggest tracks tab state) did not survive an unrelated rerun when
+# checked against this exact app. st.segmented_control is used instead as a tab-bar
+# substitute: a normal stateful widget whose value reliably persists in st.session_state
+# across ANY rerun, the same guarantee a slider already has. required=True keeps exactly
+# one option always selected, matching st.tabs()' own behavior -- and, unlike st.tabs()
+# (which runs every tab's body on every rerun), only the selected section's body runs
+# below, so an unrelated tab's content no longer computes at all while hidden.
+TAB_LABELS = ["📈 Profiles", "🔎 Inlet Summary", "🛡️ Stability", "🎯 Optimize", "🧬 Multi-Optimize", "🆚 Compare"]
+active_tab = st.segmented_control(
+    "Main view", TAB_LABELS, default=TAB_LABELS[0], required=True,
+    key="app_main_tab", label_visibility="collapsed",
 )
 
-with tab_profiles:
+if active_tab == "📈 Profiles":
     col1, col2 = st.columns(2)
 
     with col1:
@@ -549,10 +589,10 @@ with tab_profiles:
         st.plotly_chart(profile_hall_parameter(out), width="stretch", key="plot_hall_parameter")
         st.plotly_chart(profile_stability_margin(out, default_seed_type().ionization_potential), width="stretch", key="plot_stability_margin")
 
-with tab_stability:
+if active_tab == "🛡️ Stability":
     stability_tab.render(ui_values)
 
-with tab_inlet:
+if active_tab == "🔎 Inlet Summary":
     st.markdown("Everything the solver computes for the very first slice (x = 0), where the axial march starts.")
 
     mach0 = float(ideal_gas.get_mach_number(inlet.flow_speed, inlet.gas_temperature))
@@ -639,7 +679,7 @@ with tab_inlet:
     for note in (mach_note, beta_note, z_note, ionization_note, delta_T_note):
         st.markdown(f"- {note}")
 
-with tab_optimize:
+if active_tab == "🎯 Optimize":
     st.caption(
         "Sweeps one parameter within the bounds below to maximize the chosen objective, holding everything else at "
         "its current slider value."
@@ -711,7 +751,7 @@ with tab_optimize:
                                margin=dict(l=60, r=60, t=30, b=40), hovermode="x unified")
             st.plotly_chart(fig, width="stretch", key="plot_single_optimize_sweep")
 
-with tab_multi:
+if active_tab == "🧬 Multi-Optimize":
     st.caption(
         "Optimizes seed fraction, load resistivity, inlet pressure, inlet speed, and inlet gas temperature "
         "**together** -- channel geometry and magnetic field stay fixed at their current slider values, since "
@@ -858,7 +898,7 @@ with tab_multi:
             )
             st.dataframe(comparison, hide_index=True, width="stretch")
 
-with tab_compare:
+if active_tab == "🆚 Compare":
     st.caption(
         "Compare the current configuration and/or up to three saved files side by side -- performance numbers "
         "plus any two profile plots, all live (no need to re-run anything when you change a selection)."

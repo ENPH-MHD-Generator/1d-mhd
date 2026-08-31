@@ -29,12 +29,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from plotting_utils import STABILITY_NOTE, draw_boundary_contour, fixed_params_text, parse_show_save_args, save_and_show
 
-from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
-from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint
+from magnetohydrodynamics.operating_point import OperatingPoint
+from magnetohydrodynamics.presets import build_default_hall_solver, default_channel_operating_point, default_seed_type
+from magnetohydrodynamics.stability import EquilibriumSweep
+from magnetohydrodynamics.stability.stability_grid import StabilityGrid
 
 
 def plot_stability_boundary(
-        grid: dict, base: OperatingPoint, x_key: str, x_values: np.ndarray, y_key: str, y_values: np.ndarray,
+        grid: StabilityGrid, base: OperatingPoint, x_key: str, x_values: np.ndarray, y_key: str, y_values: np.ndarray,
         title: str, x_label: str, y_label: str, y_log: bool = False,
         margin_cap: float = 2.0,
 ) -> plt.Figure:
@@ -52,8 +54,8 @@ def plot_stability_boundary(
     saturated at `margin_cap`: anything at least that stable renders as the same
     "over"-colored blue, shown with an arrow on the colorbar, so the color resolution is
     spent on the marginal region instead."""
-    margin = grid["margin"]
-    margin_asymptotic = grid["margin_asymptotic"]
+    margin = grid.margin
+    margin_asymptotic = grid.margin_asymptotic
 
     norm = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=margin_cap)
 
@@ -166,7 +168,7 @@ def build_figures(sweep: EquilibriumSweep, base: OperatingPoint) -> list[tuple[s
 def main() -> None:
     args = parse_show_save_args(__doc__)
     hall_solver, _ = build_default_hall_solver()
-    base = OperatingPoint.default()
+    base = default_channel_operating_point()
     sweep = EquilibriumSweep(hall_solver, base, default_seed_type().ionization_potential)
 
     figures = build_figures(sweep, base)

@@ -133,14 +133,14 @@ def print_section_7_3_validation(solver: MarginalDesignPointSolver) -> None:
     print()
     print("Sec. 7.3 validation (B0=8T, S_C=100 MW/m^3, Caesium seed)")
     print("~10-15% deviation expected -- see this function's docstring:")
-    print(f"  Te           : {result['electron_temperature']:9.1f} K        (paper: 4223 K)")
-    print(f"  Te/Tp        : {result['electron_temperature'] / REFERENCE_GAS_TEMPERATURE:9.3f}         (paper: 8.783)")
-    print(f"  beta         : {result['beta']:9.3f}         (paper: 8.249)")
-    print(f"  S_Omega/S_L  : {result['ohmic_to_load_ratio']:9.4f}         (paper: 0.3720)")
-    print(f"  sigma        : {result['conductivity']:9.2f} S/m     (paper: 12.35 mho/m)")
-    print(f"  1-f_I        : {result['one_minus_f_I']:9.5f}         (paper: 0.01679)")
-    print(f"  n_e          : {result['n_e']:9.3e} m^-3    (paper: 7.478e19)")
-    print(f"  n_e/n_p      : {result['n_e'] / REFERENCE_GAS_NUMBER_DENSITY:9.3e}    (paper: 6.180e-7)")
+    print(f"  Te           : {result.electron_temperature:9.1f} K        (paper: 4223 K)")
+    print(f"  Te/Tp        : {result.electron_temperature / REFERENCE_GAS_TEMPERATURE:9.3f}         (paper: 8.783)")
+    print(f"  beta         : {result.beta:9.3f}         (paper: 8.249)")
+    print(f"  S_Omega/S_L  : {result.ohmic_to_load_ratio:9.4f}         (paper: 0.3720)")
+    print(f"  sigma        : {result.conductivity:9.2f} S/m     (paper: 12.35 mho/m)")
+    print(f"  1-f_I        : {result.one_minus_f_I:9.5f}         (paper: 0.01679)")
+    print(f"  n_e          : {result.n_e:9.3e} m^-3    (paper: 7.478e19)")
+    print(f"  n_e/n_p      : {result.n_e / REFERENCE_GAS_NUMBER_DENSITY:9.3e}    (paper: 6.180e-7)")
 
 
 def main() -> None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import dataclasses
+from dataclasses import dataclass
+
 import numpy as np
 from scipy import constants
 from scipy.optimize import brentq
@@ -9,6 +12,31 @@ from magnetohydrodynamics.ionization.seed_type import SeedType
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergCriterion
 from magnetohydrodynamics.thermophysics.gas_type import GasType
 from magnetohydrodynamics.transport.mhd_transport_model import MHDTransportModel
+from magnetohydrodynamics.typing import Scalar
+
+
+@dataclass
+class DesignPoint:
+    """One evaluation of Friedberg's Sec. 7.2 design procedure at a given (Te, B0,
+    target_power_density) -- everything MarginalDesignPointSolver._evaluate/solve
+    compute along the way, not just the converged Te. Replaces the ad hoc dict those
+    methods used to return.
+
+    Fields are typed Scalar (not plain float), even though _evaluate/solve's own
+    signatures only ever take scalar float args: several fields (Z, n_e,
+    ionization_fraction, ...) are computed with np.sqrt/other numpy ufuncs, which widen
+    even scalar-float inputs to numpy's own floating type under mypy."""
+    electron_temperature: Scalar
+    delta_t: Scalar
+    nu_M: Scalar
+    beta: Scalar
+    Z: Scalar
+    n_e: Scalar
+    ionization_fraction: Scalar
+    one_minus_f_I: Scalar
+    beta_crit: Scalar
+    ohmic_to_load_ratio: Scalar
+    conductivity: Scalar
 
 
 class MarginalDesignPointSolver:
@@ -39,7 +67,7 @@ class MarginalDesignPointSolver:
         self._transport_model = MHDTransportModel(seed_type=seed_type, gas_type=gas_type)
         self._criterion = FriedbergCriterion()
 
-    def _evaluate(self, electron_temperature: float, magnetic_field: float, target_power_density: float) -> dict:
+    def _evaluate(self, electron_temperature: float, magnetic_field: float, target_power_density: float) -> DesignPoint:
         delta_t = electron_temperature / self._gas_temperature - 1.0
         nu_M = self._transport_model.get_momentum_transfer_frequency(electron_temperature, self._gas_number_density)
         beta = constants.e * magnetic_field / (constants.electron_mass * nu_M)
@@ -67,7 +95,7 @@ class MarginalDesignPointSolver:
         ohmic_to_load_ratio = (beta ** 2 + (1.0 + Z) ** 2) / (beta ** 2 * Z)
         conductivity = constants.e ** 2 * n_e / (constants.electron_mass * nu_M)
 
-        return dict(
+        return DesignPoint(
             electron_temperature=electron_temperature, delta_t=delta_t, nu_M=nu_M, beta=beta, Z=Z,
             n_e=n_e, ionization_fraction=ionization_fraction, one_minus_f_I=one_minus_f_I,
             beta_crit=beta_crit, ohmic_to_load_ratio=ohmic_to_load_ratio, conductivity=conductivity,
@@ -77,7 +105,7 @@ class MarginalDesignPointSolver:
             self, magnetic_field: float, target_power_density: float,
             te_scan_range: tuple[float, float] = (600.0, 2.0e5),
             te_scan_points: int = 80,
-    ) -> dict:
+    ) -> DesignPoint:
         """Reuses `FriedbergCriterion.critical_hall_parameter` directly for the
         marginal-stability side of the equation (eq. 5.13, with the more-precise
         (4.3)/(7.1) alpha that class already uses) -- no stability algebra is
@@ -87,13 +115,13 @@ class MarginalDesignPointSolver:
         iteration -- more robust, and this codebase already uses brentq elsewhere for
         the same reason.
 
-        Returns a dict: electron_temperature, delta_t, nu_M, beta, Z, n_e,
+        Returns a DesignPoint: electron_temperature, delta_t, nu_M, beta, Z, n_e,
         ionization_fraction (f_I), one_minus_f_I, beta_crit, ohmic_to_load_ratio
         (S_Omega/S_L, eq. 6.9), conductivity (S/m)."""
 
         def residual(electron_temperature: float) -> float:
             result = self._evaluate(electron_temperature, magnetic_field, target_power_density)
-            return float(result["beta"] - result["beta_crit"])
+            return float(result.beta - result.beta_crit)
 
         # eq. 7.1's closed-form Z (a quadratic root) has a real discriminant only once
         # Te is enough above Tp -- xi*(xi+1)/mu goes negative for Te too close to Tp (a
@@ -118,6 +146,13 @@ class MarginalDesignPointSolver:
     def sweep(self, b0_values: np.ndarray, target_power_density: float) -> dict[str, np.ndarray]:
         """`solve` at every B0 in b0_values, at this solver's fixed target power
         density and inlet condition. Returns a dict of arrays, one entry per
-        quantity."""
+        quantity -- deliberately still a dict (not a DesignPoint of arrays): callers
+        like examples/design_curves.py's plots want to index a whole curve generically
+        by field name, exactly what solve()'s own single-point dict return used to make
+        awkward (typo-prone string keys with no static checking) and DesignPoint now
+        fixes there."""
         results = [self.solve(float(b0), target_power_density) for b0 in b0_values]
-        return {key: np.array([result[key] for result in results]) for key in results[0]}
+        return {
+            field.name: np.array([getattr(result, field.name) for result in results])
+            for field in dataclasses.fields(DesignPoint)
+        }

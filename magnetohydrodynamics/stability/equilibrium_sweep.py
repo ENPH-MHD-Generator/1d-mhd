@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import contextlib
-
 import numpy as np
 from scipy import constants
-from scipy.optimize import brentq
 
+from magnetohydrodynamics.operating_point import OperatingPoint
+from magnetohydrodynamics.solver.equilibrium import Equilibrium, EquilibriumInputs
 from magnetohydrodynamics.solver.hall_solver import HallSolver
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergAsymptoticCriterion, FriedbergCriterion
-from magnetohydrodynamics.stability.operating_point import OperatingPoint
+from magnetohydrodynamics.stability.stability_grid import StabilityGrid, VolumeGrid
 from magnetohydrodynamics.typing import Scalar
 
 
@@ -23,14 +22,14 @@ class EquilibriumSweep:
         self._base = base
         self._ionization_potential = ionization_potential
 
-    def _solve(self, **overrides) -> tuple[dict, dict]:
+    def _solve(self, **overrides) -> tuple[EquilibriumInputs, Equilibrium]:
         """resolve `overrides` against `base` and solve the batch equilibrium there --
         the shared first step of every method below. Returns (resolved_point, result)."""
         point = self._base.resolve(**overrides)
-        result = self._hall_solver.solve_equilibrium_batch(**point)
+        result = self._hall_solver.solve_equilibrium_batch(**point.as_kwargs())
         return point, result
 
-    def grid(self, x_key: str, x_values: np.ndarray, y_key: str, y_values: np.ndarray) -> dict[str, np.ndarray]:
+    def grid(self, x_key: str, x_values: np.ndarray, y_key: str, y_values: np.ndarray) -> StabilityGrid:
         """Solve the local equilibrium at every (x, y) combination of two physical-knob
         sweep axes and evaluate both stability criteria there, via a single vectorized
         `solve_equilibrium_batch` call instead of one equilibrium (and one Plasma
@@ -44,34 +43,40 @@ class EquilibriumSweep:
         X, Y = np.meshgrid(x_values, y_values)
         point, result = self._solve(**{x_key: X, y_key: Y})
 
-        ionization_fraction = result["electron_number_density"] / result["seed_number_density"]
-        beta = result["hall_parameter"]
-        gas_temperature = point["gas_temperature"]
+        ionization_fraction = result.electron_number_density / result.seed_number_density
+        beta = result.hall_parameter
+        gas_temperature = point.gas_temperature
 
         exact = FriedbergCriterion()
         asymptotic = FriedbergAsymptoticCriterion()
-        margin = exact.stability_margin(beta, result["electron_temperature"], gas_temperature, self._ionization_potential, ionization_fraction)
-        margin_asymptotic = asymptotic.stability_margin(beta, result["electron_temperature"], gas_temperature, self._ionization_potential, ionization_fraction)
+        margin = exact.stability_margin(beta, result.electron_temperature, gas_temperature, self._ionization_potential, ionization_fraction)
+        margin_asymptotic = asymptotic.stability_margin(beta, result.electron_temperature, gas_temperature, self._ionization_potential, ionization_fraction)
 
-        return dict(
-            beta=beta,
-            beta_crit=exact.critical_hall_parameter(
-                result["electron_temperature"], gas_temperature, self._ionization_potential, ionization_fraction,
-            ),
-            beta_crit_asymptotic=asymptotic.critical_hall_parameter(
-                result["electron_temperature"], gas_temperature, self._ionization_potential, ionization_fraction,
-            ),
-            margin=margin,
-            margin_asymptotic=margin_asymptotic,
-            Te=result["electron_temperature"],
-            ionization_fraction=ionization_fraction,
-            stable=margin >= 1.0,
+        # StabilityGrid's fields are plain arrays (X, Y above are always np.meshgrid
+        # output, so every quantity derived from them genuinely is one) -- the
+        # np.asarray() calls below are for mypy's benefit only, not a runtime
+        # conversion: everything here is already an ndarray, just typed Scalar
+        # (float | ndarray) by the general HallSolver/FriedbergCriterion signatures
+        # that produced it.
+        return StabilityGrid(
+            beta=np.asarray(beta),
+            beta_crit=np.asarray(exact.critical_hall_parameter(
+                result.electron_temperature, gas_temperature, self._ionization_potential, ionization_fraction,
+            )),
+            beta_crit_asymptotic=np.asarray(asymptotic.critical_hall_parameter(
+                result.electron_temperature, gas_temperature, self._ionization_potential, ionization_fraction,
+            )),
+            margin=np.asarray(margin),
+            margin_asymptotic=np.asarray(margin_asymptotic),
+            Te=np.asarray(result.electron_temperature),
+            ionization_fraction=np.asarray(ionization_fraction),
+            stable=np.asarray(margin >= 1.0),
         )
 
     def matched_load(
             self, seed_fraction, magnetic_field, gas_temperature,
             bracket: tuple[float, float] = (1e-8, 1e4), iters: int = 50,
-    ) -> dict:
+    ) -> Equilibrium:
         """Vectorized Friedberg (6.10) matched-load (Z=sqrt(1+beta^2)) equilibrium
         solve: at fixed (seed_fraction, magnetic_field, gas_temperature), finds the
         load_resistivity for which sqrt(1+beta^2)*eta(load_resistivity) ==
@@ -116,7 +121,7 @@ class EquilibriumSweep:
             np.full_like(np.asarray(seed_fraction, dtype=float), np.log10(bracket[1])),
         )
         log_lo, log_hi = log_lo.copy(), log_hi.copy()  # broadcast_arrays gives read-only views
-        result: dict | None = None
+        result: Equilibrium | None = None
         for _ in range(iters):
             log_mid = 0.5 * (log_lo + log_hi)
             load_resistivity = 10.0 ** log_mid
@@ -124,14 +129,14 @@ class EquilibriumSweep:
                 flow_speed=self._base.v0, gas_temperature=gas_temperature, gas_number_density=gas_number_density,
                 seed_number_density=seed_number_density, magnetic_field=magnetic_field, load_resistivity=load_resistivity,
             )
-            h = np.sqrt(1.0 + result["hall_parameter"] ** 2) * result["resistivity"] - load_resistivity
+            h = np.sqrt(1.0 + result.hall_parameter ** 2) * result.resistivity - load_resistivity
             positive = h > 0.0  # h(lo) > 0, h(hi) < 0 by construction of `bracket` -- root is in [mid, hi] iff h(mid) > 0
             log_lo = np.where(positive, log_mid, log_lo)
             log_hi = np.where(positive, log_hi, log_mid)
         assert result is not None, "iters must be >= 1"
         return result
 
-    def volume_grid(self, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray) -> dict:
+    def volume_grid(self, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray) -> VolumeGrid:
         """Precomputed 3-D equilibrium/stability table over (seed_fraction, B0, Tp),
         solved with the Friedberg (6.10) matched-load Z=sqrt(1+beta^2) policy
         throughout -- load resistivity is never a free axis here (see `matched_load`;
@@ -153,23 +158,26 @@ class EquilibriumSweep:
         SF, B0, TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
         result = self.matched_load(SF, B0, TP)
 
-        ionization_fraction = result["electron_number_density"] / result["seed_number_density"]
+        ionization_fraction = result.electron_number_density / result.seed_number_density
         criterion = FriedbergCriterion()
-        margin = criterion.stability_margin(result["hall_parameter"], result["electron_temperature"], TP, self._ionization_potential, ionization_fraction)
+        margin = criterion.stability_margin(result.hall_parameter, result.electron_temperature, TP, self._ionization_potential, ionization_fraction)
 
-        return dict(
-            margin=margin,
-            stable=margin >= 1.0,
-            Te=result["electron_temperature"],
-            ionization_fraction=ionization_fraction,
-            load_power_density=result["load_power_density"],
+        # See grid()'s comment on these np.asarray() calls -- SF/B0/TP are always
+        # np.meshgrid output, so everything derived from them already is an array.
+        return VolumeGrid(
+            margin=np.asarray(margin),
+            stable=np.asarray(margin >= 1.0),
+            Te=np.asarray(result.electron_temperature),
+            ionization_fraction=np.asarray(ionization_fraction),
+            load_power_density=np.asarray(result.load_power_density),
         )
 
     def margin_minus_level(self, level: float = 1.0, **overrides) -> Scalar:
         """beta_crit/beta - level, evaluated via solve_equilibrium_batch for whatever
         combination of scalar/array physical-knob `overrides` is given (see
-        `OperatingPoint.resolve`). Used both for big vectorized scans and, with scalar
-        args, as the objective handed to brentq for individual root refinement.
+        `OperatingPoint.resolve`). Used for big vectorized scans -- e.g. the coarse
+        scan `critical_load_resistivity_surface` refines with its own vectorized
+        bisection.
 
         `level` generalizes past the marginal-stability level (1.0, the default,
         margin == 1): callers wanting some safety buffer -- "stable with margin >=
@@ -177,39 +185,16 @@ class EquilibriumSweep:
         find that boundary by searching for margin_minus_level's zero crossing at
         `level` instead of 1.0, everything else about the search unchanged."""
         point, result = self._solve(**overrides)
-        ionization_fraction = result["electron_number_density"] / result["seed_number_density"]
+        ionization_fraction = result.electron_number_density / result.seed_number_density
         margin = FriedbergCriterion().stability_margin(
-            result["hall_parameter"], result["electron_temperature"], point["gas_temperature"],
+            result.hall_parameter, result.electron_temperature, point.gas_temperature,
             self._ionization_potential, ionization_fraction,
         )
         return margin - level
 
-    @staticmethod
-    def find_crossings(margin_minus_level_values: np.ndarray, axis_values: np.ndarray, objective) -> list[float]:
-        """Every value of `axis_values` (refined by bisection) where a precomputed 1-D
-        array of (beta_crit/beta - 1) changes sign -- the vectorized-scan counterpart
-        of scanning-then-bisecting one point at a time. `objective(value) ->
-        beta_crit/beta - 1` is only called a handful of times per detected crossing
-        (brentq's own refinement), not once per scan point. A static method: it's a
-        generic sign-change/bisection utility with no dependency on this sweep's own
-        hall_solver/base/ionization_potential, grouped here because it's always used
-        alongside `critical_load_resistivity_surface`.
-
-        Scanning for *all* sign changes -- not just checking the two endpoints --
-        matters because this system can have a genuine stability *window*
-        (unstable-stable-unstable) rather than a single threshold: checking only the
-        endpoints can't tell "never crosses" apart from "crosses an even number of
-        times, same sign at both ends"."""
-        sign_changes = np.where(np.diff(np.sign(margin_minus_level_values)) != 0)[0]
-        roots = []
-        for k in sign_changes:
-            with contextlib.suppress(ValueError, RuntimeError):
-                roots.append(brentq(objective, axis_values[k], axis_values[k + 1], xtol=1e-4 * axis_values[k] + 1e-8))
-        return sorted(roots)
-
     def critical_load_resistivity_surface(
             self, seed_fraction_values: np.ndarray, b0_values: np.ndarray, level: float = 1.0,
-            load_resistivity_bracket: tuple[float, float] = (1e-4, 20.0), scan_points: int = 60,
+            load_resistivity_bracket: tuple[float, float] = (1e-4, 20.0), scan_points: int = 60, refine_iters: int = 40,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """For each (seed_fraction, B0), finds the critical load resistivity -- the
         boundary surface (at margin == `level`; the default, 1.0, is marginal
@@ -228,34 +213,66 @@ class EquilibriumSweep:
         the surface's color can carry a genuinely independent piece of information
         instead of re-deriving the height.
 
-        The scan itself (the expensive part -- every (B0, seed_fraction,
-        load_resistivity) combination) is one vectorized `margin_minus_level` call;
-        only the brentq refinement of each detected crossing falls back to a handful
-        of individual (still batch-based, just scalar-shaped) evaluations."""
+        The scan (every (B0, seed_fraction, load_resistivity) combination) is one
+        vectorized `margin_minus_level` call. This used to refine each detected
+        crossing with a scalar `scipy.optimize.brentq` call in a Python-level
+        (B0, seed_fraction) double loop -- profiled as this method's dominant cost
+        (thousands of scalar HallSolver-adjacent calls, one full fixed-point solve
+        each, for a modest grid). Refinement is now a second, fully vectorized
+        log-space bisection (`refine_iters` rounds, same idiom as `matched_load`/
+        `SeedDensityBounds._bisect_ceiling`) over every cell's own scan-bracketed
+        interval at once -- collapsing that Python loop into a handful of batch calls.
+
+        Still finds *every* sign change per cell, not just the endpoints -- the same
+        reason the old per-cell version scanned first rather than just bisecting the
+        full bracket directly (this system can have a genuine stability window,
+        unstable-stable-unstable, not just a single threshold): `lower`/`upper` are
+        the first/last sign change the scan found, matching what the old
+        `roots[0]`/`roots[-1]` selection did."""
         scan_values = np.logspace(np.log10(load_resistivity_bracket[0]), np.log10(load_resistivity_bracket[1]), scan_points)
         B0, SF, LR = np.meshgrid(b0_values, seed_fraction_values, scan_values, indexing="ij")
-        # B0/SF/LR are always arrays here (from meshgrid), so this is always an ndarray at
-        # runtime -- np.asarray just tells mypy that (margin_minus_level's general signature
-        # also accepts scalar overrides, e.g. the per-point `objective` closure below).
         values: np.ndarray = np.asarray(self.margin_minus_level(level, B0=B0, seed_fraction=SF, load_resistivity=LR))  # shape (len(b0), len(sf), scan_points)
 
-        shape = (len(b0_values), len(seed_fraction_values))
-        lower = np.full(shape, np.nan)
-        upper = np.full(shape, np.nan)
-        lower_power = np.full(shape, np.nan)
-        upper_power = np.full(shape, np.nan)
+        # changes[..., k] is True where the scan crosses zero between scan_values[k] and
+        # scan_values[k+1] -- first_index/last_index locate the first/last such interval
+        # per (B0, seed_fraction) cell (argmax finds the first True; reversing first finds
+        # the last), exactly the two crossings the old per-cell roots[0]/roots[-1] kept.
+        changes = np.diff(np.sign(values), axis=-1) != 0
+        any_change = changes.any(axis=-1)
+        first_index = np.argmax(changes, axis=-1)
+        last_index = changes.shape[-1] - 1 - np.argmax(changes[..., ::-1], axis=-1)
+        has_window = any_change & (last_index != first_index)
 
-        for i, b0 in enumerate(b0_values):
-            for j, seed_fraction in enumerate(seed_fraction_values):
-                def objective(lr, b0=b0, seed_fraction=seed_fraction) -> float:
-                    return float(self.margin_minus_level(level, B0=b0, seed_fraction=seed_fraction, load_resistivity=lr))
+        B0_2d, SF_2d = np.meshgrid(b0_values, seed_fraction_values, indexing="ij")
 
-                roots = self.find_crossings(values[i, j, :], scan_values, objective)
-                if not roots:
-                    continue
-                lower[i, j] = roots[0]
-                lower_power[i, j] = float(self._solve(B0=b0, seed_fraction=seed_fraction, load_resistivity=roots[0])[1]["load_power_density"])
-                if len(roots) > 1:
-                    upper[i, j] = roots[-1]
-                    upper_power[i, j] = float(self._solve(B0=b0, seed_fraction=seed_fraction, load_resistivity=roots[-1])[1]["load_power_density"])
+        def refine(bracket_index: np.ndarray, valid: np.ndarray) -> np.ndarray:
+            """Vectorized log-space bisection of [scan_values[bracket_index],
+            scan_values[bracket_index + 1]] at every (B0, seed_fraction) cell at once.
+            Doesn't assume which bracket endpoint is positive -- each step compares the
+            midpoint's sign against the lower endpoint's own sign instead of a hardcoded
+            one (same reasoning as `SeedDensityBounds._bisect_ceiling`)."""
+            bracket_lo = scan_values[bracket_index]
+            bracket_hi = scan_values[np.minimum(bracket_index + 1, scan_points - 1)]
+            positive_at_lo = np.asarray(self.margin_minus_level(level, B0=B0_2d, seed_fraction=SF_2d, load_resistivity=bracket_lo)) > 0.0
+
+            log_lo, log_hi = np.log10(bracket_lo), np.log10(bracket_hi)
+            for _ in range(refine_iters):
+                log_mid = 0.5 * (log_lo + log_hi)
+                lr_mid = 10.0 ** log_mid
+                positive = np.asarray(self.margin_minus_level(level, B0=B0_2d, seed_fraction=SF_2d, load_resistivity=lr_mid)) > 0.0
+                go_high = positive == positive_at_lo  # sign(mid) matches sign(lo) => root is in [mid, hi]
+                log_lo = np.where(go_high, log_mid, log_lo)
+                log_hi = np.where(go_high, log_hi, log_mid)
+            return np.where(valid, 10.0 ** (0.5 * (log_lo + log_hi)), np.nan)
+
+        lower = refine(first_index, any_change)
+        upper = refine(last_index, has_window)
+
+        # NaN load_resistivity propagates to NaN load_power_density cleanly (no exception,
+        # just the elementwise fixed-point math computing NaN throughout) -- errstate just
+        # silences the resulting (harmless, expected) invalid-value warnings.
+        with np.errstate(invalid="ignore"):
+            lower_power = np.asarray(self._solve(B0=B0_2d, seed_fraction=SF_2d, load_resistivity=lower)[1].load_power_density)
+            upper_power = np.asarray(self._solve(B0=B0_2d, seed_fraction=SF_2d, load_resistivity=upper)[1].load_power_density)
+
         return lower, upper, lower_power, upper_power

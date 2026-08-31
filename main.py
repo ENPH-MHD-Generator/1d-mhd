@@ -16,7 +16,6 @@ def main():
     t0 = time.perf_counter()
     channel = hall_solver.march(**params)
     print(time.perf_counter() - t0)
-    # exit()
 
     out = channel.to_dict()
 
@@ -34,16 +33,6 @@ def main():
     print(f"Power: {P}")
 
     print(f"n_e = {out['ne'][0]:.3e}")
-
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(6, 4))
-
-    plt.plot(out['x'], out['S_load'], label='Te', linestyle='--')
-    plt.xlabel('x [m]')
-    plt.ylabel('Temperature [K]')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
 
     perf = summarize_performance(
         out, A=channel_area,

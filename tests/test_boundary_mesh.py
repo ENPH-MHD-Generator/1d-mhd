@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from magnetohydrodynamics.stability.boundary_mesh import StabilityBoundaryMesh
+from magnetohydrodynamics.stability.stability_grid import VolumeGrid
 
 
 @pytest.fixture
@@ -29,7 +30,14 @@ def mesh(axes) -> StabilityBoundaryMesh:
     _SF, B0, _TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
     margin = 0.4 * B0  # == 1.0 exactly at B0 = 2.5
     load_power_density = np.full_like(margin, 1e6)
-    grid = dict(margin=margin, load_power_density=load_power_density)
+    # Te/ionization_fraction aren't read by anything under test here (extract() and
+    # stable_direction_segments() only ever touch .margin/.load_power_density) -- filled
+    # with harmless placeholders just to build a complete, valid VolumeGrid.
+    grid = VolumeGrid(
+        margin=margin, stable=margin >= 1.0,
+        Te=np.zeros_like(margin), ionization_fraction=np.zeros_like(margin),
+        load_power_density=load_power_density,
+    )
     return StabilityBoundaryMesh(grid, seed_fraction_values, b0_values, tp_values)
 
 
