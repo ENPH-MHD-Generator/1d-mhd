@@ -3,8 +3,9 @@ Interactive UI for the 1-D linear Hall MHD generator.
 
 Lets you tweak channel geometry / inlet conditions with sliders and see the
 resulting axial profiles and performance figures update live, inspect the
-full inlet plasma state, and optimize one chosen parameter (within bounds you
-set) to maximize a chosen objective (e.g. load power).
+full inlet plasma state, and optimize one chosen parameter -- or several at
+once -- (within bounds you set) to maximize a chosen objective (e.g. load
+power). Plots are interactive (Plotly): zoom, pan, and hover for exact values.
 
 Run with:
     uv run --extra ui streamlit run ui/app.py
@@ -13,7 +14,11 @@ This is intentionally separate from main.py -- it depends on `streamlit`,
 which lives in the optional "ui" dependency group so `uv sync` (no extras)
 stays lightweight.
 """
+import re
 import sys
+import time
+import tomllib
+from datetime import datetime
 from pathlib import Path
 
 # This project isn't installed as a package (`package = false` in
@@ -22,11 +27,12 @@ from pathlib import Path
 # is importable regardless of the current working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
-from scipy.optimize import minimize_scalar
+import tomli_w
+from scipy.optimize import differential_evolution, minimize_scalar
 
 from magnetohydrodynamics.analysis import summarize_performance
 from magnetohydrodynamics.presets import build_default_hall_solver
@@ -34,8 +40,31 @@ from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
 
 st.set_page_config(page_title="Hall MHD Generator", layout="wide")
 
+# Scoped to the sidebar only (every rule prefixed) -- tighter vertical rhythm so the whole
+# control panel fits on one screen without scrolling. The main content area is untouched.
+# Deliberately conservative: blanket-overriding [data-testid="stVerticalBlock"]'s gap and
+# [data-testid="stElementContainer"]'s margin (both match at *every* nesting level, including
+# inside st.columns()) collapsed the Save/Load rows into an overlapping mess. Only single,
+# specific containers are touched here.
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] .block-container { padding-top: 1rem; padding-bottom: 1rem; }
+    [data-testid="stSidebar"] h2 { font-size: 1.05rem; margin: 0.6rem 0 0.2rem 0; padding: 0; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Colors (matplotlib's "tab10" hex values, so this still looks like the old plots).
+COLOR_BLUE = "#1f77b4"
+COLOR_ORANGE = "#ff7f0e"
+COLOR_GREEN = "#2ca02c"
+COLOR_PURPLE = "#9467bd"
+COLOR_RED = "#d62728"
+
 # Parameters the UI exposes, keyed by the name used in both `st.session_state`
-# and `build_march_params`. (label, min, max, default, step)
+# and `build_march_params`. (full label, default min, default max, default value, step)
 UI_PARAMS = {
     "channel_side_mm": ("Channel side (square cross-section) [mm]", 10.0, 200.0, 48.0, 1.0),
     "channel_length": ("Channel length [m]", 0.02, 1.0, 0.2, 0.01),
@@ -46,12 +75,122 @@ UI_PARAMS = {
     "seed_fraction_log10": ("log10(seed fraction)", -5.0, -1.0, float(np.log10(6.18e-3)), 0.05),
     "load_resistivity": ("Load resistivity [Ω·m]", 0.001, 2.0, 0.1171875, 0.001),
 }
-NUM_SLICES_DEFAULT = 200
+NUM_SLICES_PARAMS = ("Axial slices", 20, 400, 200, 10)
+
+# Short labels for the sidebar's inline (label-left-of-slider) layout; the full labels above
+# remain in use everywhere else (Optimize tabs, results tables, plot axes).
+SIDEBAR_SHORT_LABELS = {
+    "channel_side_mm": "Side [mm]",
+    "channel_length": "Length [m]",
+    "num_slices": "Slices",
+    "inlet_gas_temperature": "Inlet T [K]",
+    "inlet_pressure_kpa": "Inlet p [kPa]",
+    "inlet_speed": "Inlet v [m/s]",
+    "magnetic_field": "B [T]",
+    "seed_fraction_log10": "log10(seed)",
+    "load_resistivity": "R_load [Ω·m]",
+}
 
 OBJECTIVES = {
     "Load power (PL)": lambda out, params, perf: perf["PL"],
     "Electrical efficiency": lambda out, params, perf: perf["eta_electrical"],
     "Enthalpy extraction ratio": lambda out, params, perf: perf["enthalpy_extraction_ratio"],
+}
+
+# The parameters the multi-parameter optimizer searches over: everything actually
+# controllable in practice (seed fraction, load resistivity, and the inlet conditions).
+# Channel geometry and magnetic field are fixed by the use case, so they're excluded --
+# the multi-optimizer holds them at their current slider values.
+MULTI_OPTIMIZABLE_KEYS = [
+    "inlet_gas_temperature", "inlet_pressure_kpa", "inlet_speed", "seed_fraction_log10", "load_resistivity",
+]
+
+# Everything a "configuration" is: the 8 UI_PARAMS values plus the slice count.
+CONFIG_KEYS = list(UI_PARAMS) + ["num_slices"]
+
+SAVE_DIR = Path(__file__).resolve().parent / "saved_configs"
+SAVE_DIR.mkdir(exist_ok=True)
+
+
+def list_saved_configs() -> list[Path]:
+    return sorted(SAVE_DIR.glob("*.toml"))
+
+
+def slugify(name: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", name.strip()).strip("_").lower()
+    return slug
+
+
+def save_config(values: dict, name: str) -> Path:
+    """Save a configuration as TOML. A given name overwrites its own file on re-save
+    (a "named slot"); leaving it blank always creates a fresh timestamped file."""
+    slug = slugify(name)
+    if slug:
+        path = SAVE_DIR / f"{slug}.toml"
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = SAVE_DIR / f"config_{stamp}.toml"
+        counter = 1
+        while path.exists():  # only matters if two unnamed saves land in the same second
+            path = SAVE_DIR / f"config_{stamp}_{counter}.toml"
+            counter += 1
+
+    data = {
+        "name": name or path.stem,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "values": {key: values[key] for key in CONFIG_KEYS},
+    }
+    with open(path, "wb") as f:
+        tomli_w.dump(data, f)
+    return path
+
+
+def load_config(path: Path) -> tuple[dict, str]:
+    """Returns (values, display_name)."""
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    return data["values"], data.get("name", path.stem)
+
+
+def pending_apply_for_values(values: dict) -> dict:
+    """Build a pending_apply dict that restores `values` exactly, widening any
+    user-customized slider bounds that would otherwise clamp a loaded value away from
+    what was saved."""
+    updates = dict(values)
+    for key, value in values.items():
+        lo_key, hi_key = f"slider_bound_lo_{key}", f"slider_bound_hi_{key}"
+        current_lo = st.session_state.get(lo_key)
+        current_hi = st.session_state.get(hi_key)
+        if current_lo is not None and value < current_lo:
+            updates[lo_key] = value
+        if current_hi is not None and value > current_hi:
+            updates[hi_key] = value
+    return updates
+
+
+def bounds_label(key: str) -> str:
+    """Label used where the *units of the bound itself* matter (log10 vs. linear)."""
+    return UI_PARAMS[key][0]
+
+
+def result_label(key: str) -> str:
+    """Label used for a resulting/optimal *value* (already converted out of log-space)."""
+    return "Seed fraction" if key == "seed_fraction_log10" else UI_PARAMS[key][0]
+
+
+def result_value(key: str, raw_value: float) -> str:
+    if key == "seed_fraction_log10":
+        return f"{10.0 ** raw_value:.3e}"
+    return f"{raw_value:.4g}"
+
+
+# differential_evolution's population is popsize * ndim; it runs up to maxiter generations
+# (often fewer, via early convergence). More evaluations -> a more thorough search of the
+# 5-parameter space, at the cost of time -- see the live estimate in the Multi-Optimize tab.
+SEARCH_THOROUGHNESS_PRESETS = {
+    "Quick": dict(maxiter=15, popsize=8),
+    "Balanced": dict(maxiter=40, popsize=15),
+    "Thorough": dict(maxiter=80, popsize=25),
 }
 
 
@@ -93,11 +232,208 @@ def regime_note(value: float, low: float, high: float, low_text: str, mid_text: 
     return mid_text
 
 
-# --- apply a pending "set slider to this optimal value" request, before any
-# widget with that key is created below.
+def bounded_slider(key: str, label: str, default_lo: float, default_hi: float, default_value: float, step) -> None:
+    """A slider whose min/max bounds are user-adjustable via a small popover next to it,
+    with a reset-to-default for the bounds themselves."""
+    # "slider_bound_" (not "bound_") to avoid colliding with the Optimize tabs' own
+    # bound_lo_{key}/bound_hi_{key} search-bound widget keys, which share the same key namespace.
+    lo_key, hi_key = f"slider_bound_lo_{key}", f"slider_bound_hi_{key}"
+    st.session_state.setdefault(lo_key, default_lo)
+    st.session_state.setdefault(hi_key, default_hi)
+    st.session_state.setdefault(key, default_value)
+
+    lo, hi = st.session_state[lo_key], st.session_state[hi_key]
+    bounds_invalid = lo >= hi
+    if bounds_invalid:
+        lo, hi = default_lo, default_hi
+
+    # Keep the current value inside the (possibly just-narrowed) bounds.
+    st.session_state[key] = min(max(st.session_state[key], lo), hi)
+
+    col_label, col_slider, col_gear = st.columns([3, 8, 1], vertical_alignment="center")
+    with col_label:
+        st.caption(SIDEBAR_SHORT_LABELS.get(key, label))
+    with col_slider:
+        st.slider(label, lo, hi, key=key, step=step, label_visibility="collapsed")
+    with col_gear:
+        # Empty label -> just the popover's own built-in chevron, no emoji/text competing
+        # for space in this narrow column.
+        with st.popover("", width="stretch", help=f"Adjust bounds for {label}"):
+            st.markdown(f"**{label}**  \nAdjust slider bounds")
+            st.number_input("Min", key=lo_key, step=step)
+            st.number_input("Max", key=hi_key, step=step)
+            if bounds_invalid:
+                st.caption("⚠️ Min must be less than max -- using defaults until fixed.")
+            if st.button("Reset to default", key=f"reset_bounds_{key}", width="stretch"):
+                st.session_state["pending_apply"] = {lo_key: default_lo, hi_key: default_hi}
+                st.rerun()
+
+
+# --- Plotly figure helpers. Every figure gets a shared, compact layout; all comparison
+# figures share these conventions: each config gets one fixed color (shared across all its
+# lines), each physical quantity gets a fixed dash style (shared across configs) -- so e.g.
+# every config's T_p is solid and every config's T_e is dashed, but colored per config. All
+# configs plot on the *same* axes (not renormalized), so magnitudes stay comparable.
+CONFIG_COLORS = [COLOR_BLUE, COLOR_ORANGE, COLOR_GREEN]
+
+
+def _config_color(i: int) -> str:
+    return CONFIG_COLORS[i % len(CONFIG_COLORS)]
+
+
+def _base_layout(fig: go.Figure, title: str, xaxis_title: str = "x [m]", height: int = 360) -> go.Figure:
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13)),
+        xaxis_title=xaxis_title,
+        height=height,
+        margin=dict(l=60, r=60, t=40, b=40),
+        hovermode="x unified",
+        legend=dict(font=dict(size=10)),
+    )
+    return fig
+
+
+def plot_single_axis(x, series: list[tuple[str, "np.ndarray", str, str]], title: str, yaxis_title: str) -> go.Figure:
+    """series: list of (name, y, color, dash)."""
+    fig = go.Figure()
+    for name, y, color, dash in series:
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=name, line=dict(color=color, dash=dash, width=2.5)))
+    fig.update_yaxes(title_text=yaxis_title)
+    return _base_layout(fig, title)
+
+
+def plot_twin_axis(
+        x, left_series: list[tuple[str, "np.ndarray", str, str]], right_series: list[tuple[str, "np.ndarray", str, str]],
+        title: str, left_title: str, right_title: str, left_log: bool = False, right_range: tuple | None = None,
+) -> go.Figure:
+    fig = go.Figure()
+    for name, y, color, dash in left_series:
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=name, line=dict(color=color, dash=dash, width=2.5)))
+    for name, y, color, dash in right_series:
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=name, line=dict(color=color, dash=dash, width=2.5), yaxis="y2"))
+    fig.update_layout(
+        yaxis=dict(title=left_title, type="log" if left_log else "linear"),
+        yaxis2=dict(title=right_title, overlaying="y", side="right", range=list(right_range) if right_range else None),
+    )
+    return _base_layout(fig, title)
+
+
+def profile_temperature(out: dict) -> go.Figure:
+    return plot_single_axis(
+        out["x"], [("T_p (primary gas)", out["Tp"], COLOR_BLUE, "solid"), ("T_e (electron)", out["Te"], COLOR_ORANGE, "dash")],
+        "Electron vs. Primary Gas Temperature", "Temperature [K]",
+    )
+
+
+def profile_primary_gas(out: dict) -> go.Figure:
+    return plot_twin_axis(
+        out["x"], [("n_p", out["np"], COLOR_BLUE, "solid")], [("v_p", out["u"], COLOR_ORANGE, "dash")],
+        "Primary Gas: n_p, v_p", "n_p [m⁻³]", "v_p [m/s]",
+    )
+
+
+def profile_density(out: dict, seed_number_density) -> go.Figure:
+    ionization_fraction = out["ne"] / seed_number_density
+    fig = plot_twin_axis(
+        out["x"],
+        [("n_s (seed)", seed_number_density, COLOR_BLUE, "solid"), ("n_e (electrons)", out["ne"], COLOR_ORANGE, "dash")],
+        [("n_e/n_s (ionization fraction)", ionization_fraction, COLOR_GREEN, "dot")],
+        "Seed vs. Electron Density (how much of the seed is ionized)",
+        "Number density [m⁻³]", "Ionization fraction",
+        left_log=True, right_range=(0.0, 1.05),
+    )
+    return fig
+
+
+def profile_power(out: dict) -> go.Figure:
+    return plot_single_axis(
+        out["x"], [("S_Ω (ohmic)", out["S_ohm"], COLOR_BLUE, "solid"), ("S_L (load)", out["S_load"], COLOR_ORANGE, "dash")],
+        "Ohmic Heating vs Load Power", "Power density [W/m³]",
+    )
+
+
+def profile_pressure(out: dict) -> go.Figure:
+    return plot_single_axis(out["x"], [("p_p", out["p"], COLOR_GREEN, "solid")], "Primary Gas Pressure", "p_p [Pa]")
+
+
+def profile_hall_parameter(out: dict) -> go.Figure:
+    return plot_single_axis(out["x"], [("β", out["beta"], COLOR_PURPLE, "solid")], "Hall Parameter Along the Channel", "β [-]")
+
+
+def compare_temperature(configs: list[dict]) -> go.Figure:
+    series = []
+    for i, cfg in enumerate(configs):
+        c = _config_color(i)
+        series.append((f"{cfg['label']}: T_p", cfg["out"]["Tp"], c, "solid"))
+        series.append((f"{cfg['label']}: T_e", cfg["out"]["Te"], c, "dash"))
+    return plot_single_axis(
+        configs[0]["out"]["x"], series,
+        "Electron vs. Primary Gas Temperature (solid = T_p, dashed = T_e)", "Temperature [K]",
+    )
+
+
+def compare_primary_gas(configs: list[dict]) -> go.Figure:
+    left = [(f"{cfg['label']}: n_p", cfg["out"]["np"], _config_color(i), "solid") for i, cfg in enumerate(configs)]
+    right = [(f"{cfg['label']}: v_p", cfg["out"]["u"], _config_color(i), "dash") for i, cfg in enumerate(configs)]
+    return plot_twin_axis(
+        configs[0]["out"]["x"], left, right, "Primary Gas (solid = n_p, dashed = v_p)", "n_p [m⁻³]", "v_p [m/s]",
+    )
+
+
+def compare_density(configs: list[dict]) -> go.Figure:
+    left, right = [], []
+    for i, cfg in enumerate(configs):
+        c = _config_color(i)
+        left.append((f"{cfg['label']}: n_s", cfg["seed_number_density"], c, "solid"))
+        left.append((f"{cfg['label']}: n_e", cfg["out"]["ne"], c, "dash"))
+        ionization_fraction = cfg["out"]["ne"] / cfg["seed_number_density"]
+        right.append((f"{cfg['label']}: n_e/n_s", ionization_fraction, c, "dot"))
+    return plot_twin_axis(
+        configs[0]["out"]["x"], left, right,
+        "Seed/Electron Density (solid/dashed), Ionization Fraction (dotted)",
+        "Number density [m⁻³]", "Ionization fraction",
+        left_log=True, right_range=(0.0, 1.05),
+    )
+
+
+def compare_power(configs: list[dict]) -> go.Figure:
+    series = []
+    for i, cfg in enumerate(configs):
+        c = _config_color(i)
+        series.append((f"{cfg['label']}: S_Ω", cfg["out"]["S_ohm"], c, "solid"))
+        series.append((f"{cfg['label']}: S_L", cfg["out"]["S_load"], c, "dash"))
+    return plot_single_axis(
+        configs[0]["out"]["x"], series, "Ohmic Heating (solid) vs Load Power (dashed)", "Power density [W/m³]",
+    )
+
+
+def compare_pressure(configs: list[dict]) -> go.Figure:
+    series = [(cfg["label"], cfg["out"]["p"], _config_color(i), "solid") for i, cfg in enumerate(configs)]
+    return plot_single_axis(configs[0]["out"]["x"], series, "Primary Gas Pressure", "p_p [Pa]")
+
+
+def compare_hall_parameter(configs: list[dict]) -> go.Figure:
+    series = [(cfg["label"], cfg["out"]["beta"], _config_color(i), "solid") for i, cfg in enumerate(configs)]
+    return plot_single_axis(configs[0]["out"]["x"], series, "Hall Parameter Along the Channel", "β [-]")
+
+
+COMPARE_PLOTS = {
+    "Temperature (Tp, Te)": compare_temperature,
+    "Primary Gas (np, vp)": compare_primary_gas,
+    "Seed/Electron Density + Ionization": compare_density,
+    "Ohmic vs Load Power": compare_power,
+    "Pressure": compare_pressure,
+    "Hall Parameter": compare_hall_parameter,
+}
+
+
+# --- apply a pending "set slider(s)/bound(s) to these value(s)" request, before any widget
+# with those keys is created below. {state_key: value, ...} -- used by the single- and
+# multi-parameter "apply optimal value" buttons, and by "reset bounds to default".
 if "pending_apply" in st.session_state:
-    key, value = st.session_state.pop("pending_apply")
-    st.session_state[key] = value
+    updates = st.session_state.pop("pending_apply")
+    for key, value in updates.items():
+        st.session_state[key] = value
 
 
 hall_solver, gas_type = build_default_hall_solver()
@@ -110,22 +446,45 @@ with st.sidebar:
     st.header("Geometry")
     for key in ("channel_side_mm", "channel_length"):
         label, lo, hi, default, step = UI_PARAMS[key]
-        st.session_state.setdefault(key, default)
-        st.slider(label, lo, hi, key=key, step=step)
-    st.session_state.setdefault("num_slices", NUM_SLICES_DEFAULT)
-    st.slider("Axial slices", 20, 400, key="num_slices", step=10)
+        bounded_slider(key, label, lo, hi, default, step)
+    bounded_slider("num_slices", *NUM_SLICES_PARAMS)
 
     st.header("Inlet Conditions")
     for key in ("inlet_gas_temperature", "inlet_pressure_kpa", "inlet_speed", "magnetic_field", "seed_fraction_log10"):
         label, lo, hi, default, step = UI_PARAMS[key]
-        st.session_state.setdefault(key, default)
-        st.slider(label, lo, hi, key=key, step=step)
+        bounded_slider(key, label, lo, hi, default, step)
     st.caption(f"Seed fraction = {10.0 ** st.session_state['seed_fraction_log10']:.3e}")
 
     st.header("Load")
     label, lo, hi, default, step = UI_PARAMS["load_resistivity"]
-    st.session_state.setdefault("load_resistivity", default)
-    st.slider(label, lo, hi, key="load_resistivity", step=step)
+    bounded_slider("load_resistivity", label, lo, hi, default, step)
+
+    st.header("💾 Save / Load")
+    name_col, save_col = st.columns([3, 1], vertical_alignment="bottom")
+    with name_col:
+        save_name = st.text_input(
+            "Name", key="save_config_name", placeholder="optional, blank -> timestamp", label_visibility="collapsed",
+        )
+    with save_col:
+        if st.button("Save", key="save_config_button", width="stretch"):
+            current_values = {key: st.session_state[key] for key in CONFIG_KEYS}
+            saved_path = save_config(current_values, save_name)
+            st.toast(f"Saved as `{saved_path.name}`")
+
+    saved_paths = list_saved_configs()
+    if saved_paths:
+        stem_options = [p.stem for p in saved_paths]
+        stem_to_path = {p.stem: p for p in saved_paths}
+        load_col, load_btn_col = st.columns([3, 1], vertical_alignment="bottom")
+        with load_col:
+            selected_stem = st.selectbox("Load", stem_options, key="load_select", label_visibility="collapsed")
+        with load_btn_col:
+            if st.button("Load", key="load_config_button", width="stretch"):
+                loaded_values, loaded_name = load_config(stem_to_path[selected_stem])
+                st.session_state["pending_apply"] = pending_apply_for_values(loaded_values)
+                st.rerun()
+    else:
+        st.caption(f"No saved configs yet -- go in `{SAVE_DIR.relative_to(SAVE_DIR.parent.parent)}/`.")
 
 ui_values = {key: st.session_state[key] for key in UI_PARAMS}
 ui_values["num_slices"] = st.session_state["num_slices"]
@@ -150,75 +509,22 @@ if channel.choked:
         "load resistivity, or seed fraction to push the choke point further down the channel."
     )
 
-tab_profiles, tab_inlet, tab_optimize = st.tabs(["📈 Profiles", "🔎 Inlet Summary", "🎯 Optimize"])
+tab_profiles, tab_inlet, tab_optimize, tab_multi, tab_compare = st.tabs(
+    ["📈 Profiles", "🔎 Inlet Summary", "🎯 Optimize", "🧬 Multi-Optimize", "🆚 Compare"]
+)
 
 with tab_profiles:
     col1, col2 = st.columns(2)
 
     with col1:
-        fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.plot(out["x"], out["Tp"], label=r"$T_p$", linewidth=2)
-        ax.plot(out["x"], out["Te"], "--", label=r"$T_e$", linewidth=2)
-        ax.set_xlabel("x [m]"); ax.set_ylabel("Temperature [K]")
-        ax.set_title("Electron vs. Primary Gas Temperature")
-        ax.grid(alpha=0.3); ax.legend()
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-        fig, ax1 = plt.subplots(figsize=(6, 3.5))
-        ax1.set_xlabel("x [m]")
-        ax1.set_ylabel(r"$n_p$ [m$^{-3}$]", color="tab:blue")
-        ax1.plot(out["x"], out["np"], color="tab:blue")
-        ax1.tick_params(axis="y", labelcolor="tab:blue")
-        ax1.grid(alpha=0.3)
-        ax2 = ax1.twinx()
-        ax2.set_ylabel(r"$v_p$ [m/s]", color="tab:orange")
-        ax2.plot(out["x"], out["u"], "--", color="tab:orange")
-        ax2.tick_params(axis="y", labelcolor="tab:orange")
-        ax1.set_title(r"Primary Gas: $n_p$, $v_p$")
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.semilogy(out["x"], seed_number_density, label=r"$n_s$ (seed)", linewidth=2)
-        ax.semilogy(out["x"], out["ne"], "--", label=r"$n_e$ (electrons)", linewidth=2)
-        ax.set_xlabel("x [m]"); ax.set_ylabel(r"Number density [m$^{-3}$]")
-        ax.set_title("Seed vs. Electron Density (how much of the seed is ionized)")
-        ax.grid(alpha=0.3, which="both"); ax.legend()
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+        st.plotly_chart(profile_temperature(out), width="stretch", key="plot_temperature")
+        st.plotly_chart(profile_primary_gas(out), width="stretch", key="plot_primary_gas")
+        st.plotly_chart(profile_density(out, seed_number_density), width="stretch", key="plot_density")
 
     with col2:
-        fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.plot(out["x"], out["S_ohm"], label=r"$S_{\Omega}$ (ohmic)", linewidth=2)
-        ax.plot(out["x"], out["S_load"], label=r"$S_L$ (load)", linewidth=2)
-        ax.set_xlabel("x [m]"); ax.set_ylabel("Power density [W/m$^3$]")
-        ax.set_title("Ohmic Heating vs Load Power")
-        ax.grid(alpha=0.3); ax.legend()
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.plot(out["x"], out["p"], color="tab:green")
-        ax.set_xlabel("x [m]"); ax.set_ylabel(r"$p_p$ [Pa]")
-        ax.set_title("Primary Gas Pressure")
-        ax.grid(alpha=0.3)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-
-        fig, ax = plt.subplots(figsize=(6, 3.5))
-        ax.plot(out["x"], out["beta"], color="tab:purple")
-        ax.set_xlabel("x [m]"); ax.set_ylabel(r"$\beta$ [-]")
-        ax.set_title("Hall Parameter Along the Channel")
-        ax.grid(alpha=0.3)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+        st.plotly_chart(profile_power(out), width="stretch", key="plot_power")
+        st.plotly_chart(profile_pressure(out), width="stretch", key="plot_pressure")
+        st.plotly_chart(profile_hall_parameter(out), width="stretch", key="plot_hall_parameter")
 
 with tab_inlet:
     st.markdown("Everything the solver computes for the very first slice (x = 0), where the axial march starts.")
@@ -319,14 +625,25 @@ with tab_optimize:
     with oc2:
         objective_name = st.selectbox("Objective to maximize", list(OBJECTIVES))
 
-    _, default_lo, default_hi, _, _ = UI_PARAMS[target_key]
-    bc1, bc2 = st.columns(2)
-    with bc1:
-        bound_lo = st.number_input("Lower bound", value=default_lo, key=f"bound_lo_{target_key}")
-    with bc2:
-        bound_hi = st.number_input("Upper bound", value=default_hi, key=f"bound_hi_{target_key}")
+    _, default_lo, default_hi, _, target_step = UI_PARAMS[target_key]
+    bound_lo, bound_hi = st.slider(
+        f"Search bounds for {UI_PARAMS[target_key][0]}",
+        min_value=default_lo, max_value=default_hi, value=(default_lo, default_hi),
+        step=target_step, key=f"bound_range_{target_key}",
+    )
 
-    if st.button("Run optimization", type="primary"):
+    has_result = (
+        "last_optimization" in st.session_state
+        and st.session_state["last_optimization"]["target_key"] == target_key
+        and st.session_state["last_optimization"]["objective_name"] == objective_name
+    )
+    run_col, apply_col = st.columns([1, 1])
+    with run_col:
+        run_clicked = st.button("Run optimization", type="primary", width="stretch")
+    with apply_col:
+        apply_clicked = st.button("Apply optimal value to slider", disabled=not has_result, width="stretch")
+
+    if run_clicked:
         if bound_lo >= bound_hi:
             st.error("Lower bound must be less than upper bound.")
         else:
@@ -346,6 +663,11 @@ with tab_optimize:
                 value=float(result.x), objective=float(-result.fun),
                 sweep_x=sweep_x.tolist(), sweep_y=sweep_y,
             )
+            st.rerun()
+
+    if apply_clicked:
+        st.session_state["pending_apply"] = {target_key: st.session_state["last_optimization"]["value"]}
+        st.rerun()
 
     if "last_optimization" in st.session_state:
         res = st.session_state["last_optimization"]
@@ -353,16 +675,228 @@ with tab_optimize:
             label = UI_PARAMS[target_key][0]
             st.success(f"Best {label} = {res['value']:.5g}  →  {res['objective_name']} = {res['objective']:.5g}")
 
-            fig, ax = plt.subplots(figsize=(8, 3))
-            ax.plot(res["sweep_x"], res["sweep_y"])
-            ax.axvline(res["value"], color="tab:red", linestyle="--")
-            ax.scatter([res["value"]], [res["objective"]], color="tab:red", zorder=5)
-            ax.set_xlabel(label); ax.set_ylabel(objective_name)
-            ax.grid(alpha=0.3)
-            fig.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=res["sweep_x"], y=res["sweep_y"], mode="lines", name=objective_name,
+                                      line=dict(color=COLOR_BLUE, width=2.5)))
+            fig.add_trace(go.Scatter(x=[res["value"]], y=[res["objective"]], mode="markers", name="Optimum",
+                                      marker=dict(color=COLOR_RED, size=10)))
+            fig.add_vline(x=res["value"], line=dict(color=COLOR_RED, dash="dash"))
+            fig.update_layout(xaxis_title=label, yaxis_title=objective_name, height=340,
+                               margin=dict(l=60, r=60, t=30, b=40), hovermode="x unified")
+            st.plotly_chart(fig, width="stretch", key="plot_single_optimize_sweep")
 
-            if st.button("Apply optimal value to slider"):
-                st.session_state["pending_apply"] = (target_key, res["value"])
-                st.rerun()
+with tab_multi:
+    st.caption(
+        "Optimizes seed fraction, load resistivity, inlet pressure, inlet speed, and inlet gas temperature "
+        "**together** -- channel geometry and magnetic field stay fixed at their current slider values, since "
+        "those are fixed by the use case. This is a 5-parameter search, so it uses a derivative-free global "
+        "optimizer (the choke limit makes the objective landscape non-smooth) and takes noticeably longer than "
+        "the single-parameter tab."
+    )
+
+    oc1, oc2 = st.columns([2, 1])
+    with oc1:
+        multi_objective_name = st.selectbox("Objective to maximize", list(OBJECTIVES), key="multi_objective")
+    with oc2:
+        thoroughness = st.selectbox("Search thoroughness", list(SEARCH_THOROUGHNESS_PRESETS), index=1, key="multi_thoroughness")
+    maxiter = SEARCH_THOROUGHNESS_PRESETS[thoroughness]["maxiter"]
+    popsize = SEARCH_THOROUGHNESS_PRESETS[thoroughness]["popsize"]
+
+    st.markdown("**Search bounds**")
+    st.caption("Note: the seed fraction bound is in log10 units, matching its sidebar slider (e.g. -3 → 0.001).")
+    multi_bounds: dict[str, tuple[float, float]] = {}
+    bound_cols = st.columns(len(MULTI_OPTIMIZABLE_KEYS))
+    for col, key in zip(bound_cols, MULTI_OPTIMIZABLE_KEYS):
+        _, default_lo, default_hi, _, key_step = UI_PARAMS[key]
+        with col:
+            multi_bounds[key] = st.slider(
+                bounds_label(key), min_value=default_lo, max_value=default_hi,
+                value=(default_lo, default_hi), step=key_step, key=f"multi_bound_range_{key}",
+            )
+
+    invalid_bounds = [key for key, (lo, hi) in multi_bounds.items() if lo >= hi]
+
+    # Search at a reduced axial resolution for speed (hundreds-thousands of marches), then
+    # re-evaluate the found optimum at the slider's actual resolution for display.
+    search_num_slices = min(int(ui_values["num_slices"]), 60)
+    ndim = len(MULTI_OPTIMIZABLE_KEYS)
+    max_evals = popsize * ndim * (maxiter + 1)
+
+    # Time evaluations at a few random points drawn from the actual search bounds (not just
+    # the current slider point, which is often mid-choke and unrepresentatively fast/slow) to
+    # give an upfront estimate. Cheap (a handful of extra marches) -- reruns on every change.
+    _rng = np.random.default_rng(0)
+    _sample_times = []
+    for _ in range(5):
+        _trial_ui = dict(ui_values, num_slices=search_num_slices)
+        for _key in MULTI_OPTIMIZABLE_KEYS:
+            _lo, _hi = multi_bounds[_key]
+            _trial_ui[_key] = _rng.uniform(_lo, _hi) if _hi > _lo else _lo
+        _t0 = time.perf_counter()
+        solve(hall_solver, gas_type, _trial_ui)
+        _sample_times.append(time.perf_counter() - _t0)
+    per_eval_s = float(np.mean(_sample_times))
+    # +40% fudge factor: the sampled points tend to under-represent the longer, un-choked
+    # evaluations DE spends more time on as it converges, plus DE's own per-generation and
+    # polish-step overhead aren't captured by march timing alone.
+    estimated_s = per_eval_s * max_evals * 1.4
+    st.caption(
+        f"Estimated time: up to ~{estimated_s:.0f}s ({max_evals:,} evaluations at {search_num_slices} slices "
+        f"each, ~{per_eval_s * 1000:.1f} ms/evaluation). Often finishes sooner via early convergence."
+    )
+
+    has_multi_result = (
+        "last_multi_optimization" in st.session_state
+        and st.session_state["last_multi_optimization"]["objective_name"] == multi_objective_name
+    )
+    run_col, apply_col = st.columns([1, 1])
+    with run_col:
+        run_multi_clicked = st.button("Run multi-parameter optimization", type="primary", width="stretch")
+    with apply_col:
+        apply_multi_clicked = st.button(
+            "Apply all optimal values to sliders", disabled=not has_multi_result, width="stretch",
+        )
+
+    if run_multi_clicked:
+        if invalid_bounds:
+            st.error(f"Lower bound must be less than upper bound for: {', '.join(bounds_label(k) for k in invalid_bounds)}.")
+        else:
+            de_bounds = [multi_bounds[key] for key in MULTI_OPTIMIZABLE_KEYS]
+
+            def neg_objective(x):
+                trial_ui = dict(ui_values, num_slices=search_num_slices)
+                for key, value in zip(MULTI_OPTIMIZABLE_KEYS, x):
+                    trial_ui[key] = value
+                trial_params, _, trial_out, trial_perf = solve(hall_solver, gas_type, trial_ui)
+                return -OBJECTIVES[multi_objective_name](trial_out, trial_params, trial_perf)
+
+            progress_bar = st.progress(0.0, text="Starting search...")
+            search_start = time.perf_counter()
+
+            def on_generation(intermediate_result):
+                elapsed = time.perf_counter() - search_start
+                fraction = min(1.0, intermediate_result.nit / maxiter)
+                eta = elapsed * (1.0 - fraction) / fraction if fraction > 0 else 0.0
+                progress_bar.progress(
+                    fraction,
+                    text=(
+                        f"Generation {intermediate_result.nit}/{maxiter} "
+                        f"({intermediate_result.nfev:,} evaluations) -- best {multi_objective_name} so far: "
+                        f"{-intermediate_result.fun:.5g} -- {elapsed:.1f}s elapsed, ~{eta:.1f}s remaining"
+                    ),
+                )
+
+            result = differential_evolution(
+                neg_objective, de_bounds, maxiter=maxiter, popsize=popsize, tol=1e-6, seed=0, polish=True,
+                callback=on_generation,
+            )
+
+            total_time = time.perf_counter() - search_start
+            progress_bar.progress(1.0, text=f"Done in {total_time:.1f}s ({result.nfev:,} evaluations).")
+
+            best_ui = dict(ui_values)
+            for key, value in zip(MULTI_OPTIMIZABLE_KEYS, result.x):
+                best_ui[key] = value
+            best_params, best_channel, best_out, best_perf = solve(hall_solver, gas_type, best_ui)
+            best_objective = OBJECTIVES[multi_objective_name](best_out, best_params, best_perf)
+
+            st.session_state["last_multi_optimization"] = dict(
+                objective_name=multi_objective_name,
+                values={key: float(value) for key, value in zip(MULTI_OPTIMIZABLE_KEYS, result.x)},
+                objective=float(best_objective),
+                choked=best_channel.choked,
+            )
+            st.rerun()
+
+    if apply_multi_clicked:
+        st.session_state["pending_apply"] = dict(st.session_state["last_multi_optimization"]["values"])
+        st.rerun()
+
+    if "last_multi_optimization" in st.session_state:
+        res = st.session_state["last_multi_optimization"]
+        if res["objective_name"] == multi_objective_name:
+            current_objective = OBJECTIVES[multi_objective_name](out, params, perf)
+            st.success(
+                f"Best {multi_objective_name} = {res['objective']:.5g}  "
+                f"(current slider values give {current_objective:.5g})"
+            )
+            if res["choked"]:
+                st.caption("⚠️ The optimum found chokes before the channel outlet (see the Profiles tab warning).")
+
+            comparison = pd.DataFrame(
+                [
+                    (result_label(key), result_value(key, ui_values[key]), result_value(key, res["values"][key]))
+                    for key in MULTI_OPTIMIZABLE_KEYS
+                ],
+                columns=["Parameter", "Current", "Optimal"],
+            )
+            st.dataframe(comparison, hide_index=True, width="stretch")
+
+with tab_compare:
+    st.caption(
+        "Compare the current configuration and/or up to three saved files side by side -- performance numbers "
+        "plus any two profile plots, all live (no need to re-run anything when you change a selection)."
+    )
+
+    saved_paths = list_saved_configs()
+    slot_options = ["None", "Current configuration"] + [p.stem for p in saved_paths]
+    stem_to_path = {p.stem: p for p in saved_paths}
+
+    slot_cols = st.columns(3)
+    slot_choices = []
+    for i, col in enumerate(slot_cols):
+        with col:
+            default_index = 1 if i == 0 else 0  # slot 1 defaults to "Current configuration"
+            slot_choices.append(st.selectbox(f"Slot {i + 1}", slot_options, index=default_index, key=f"compare_slot_{i}"))
+
+    configs = []
+    for choice in slot_choices:
+        if choice == "None":
+            continue
+        if choice == "Current configuration":
+            configs.append(dict(label="Current", out=out, perf=perf, channel=channel, seed_number_density=seed_number_density))
+        else:
+            c_values, c_name = load_config(stem_to_path[choice])
+            c_params, c_channel, c_out, c_perf = solve(hall_solver, gas_type, c_values)
+            c_seed_number_density = 10.0 ** c_values["seed_fraction_log10"] * c_out["np"]
+            configs.append(dict(label=c_name, out=c_out, perf=c_perf, channel=c_channel, seed_number_density=c_seed_number_density))
+
+    if not configs:
+        st.info("Pick at least one configuration above (a slot, or a saved file) to compare.")
+    else:
+        st.markdown("**Performance**")
+        perf_rows = [
+            (
+                cfg["label"],
+                f"{cfg['perf']['PL']:.1f} W",
+                f"{cfg['perf']['eta_electrical'] * 100:.1f} %",
+                f"{cfg['perf']['eta_isentropic'] * 100:.1f} %",
+                f"{cfg['perf']['enthalpy_extraction_ratio'] * 100:.1f} %",
+                "Yes" if cfg["channel"].choked else "No",
+            )
+            for cfg in configs
+        ]
+        perf_df = pd.DataFrame(
+            perf_rows,
+            columns=["Configuration", "Load Power", "Electrical Eff.", "Isentropic Eff.", "Enthalpy Extraction", "Choked?"],
+        )
+        st.dataframe(perf_df, hide_index=True, width="stretch")
+
+        st.markdown("**Plots**")
+        plot_names = list(COMPARE_PLOTS)
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            plot_choice_1 = st.selectbox("Plot 1", plot_names, index=0, key="compare_plot_1")
+        with pc2:
+            # Default to a different plot than Plot 1 (index 1 there == index 1 here would
+            # otherwise default both pickers to the same plot).
+            plot_choice_2 = st.selectbox("Plot 2", ["None"] + plot_names, index=4, key="compare_plot_2")
+
+        if plot_choice_2 == "None":
+            st.plotly_chart(COMPARE_PLOTS[plot_choice_1](configs), width="stretch", key="compare_chart_1")
+        else:
+            plot_col_1, plot_col_2 = st.columns(2)
+            with plot_col_1:
+                st.plotly_chart(COMPARE_PLOTS[plot_choice_1](configs), width="stretch", key="compare_chart_1")
+            with plot_col_2:
+                st.plotly_chart(COMPARE_PLOTS[plot_choice_2](configs), width="stretch", key="compare_chart_2")

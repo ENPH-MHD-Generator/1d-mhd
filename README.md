@@ -44,6 +44,8 @@ uv run --extra ui streamlit run ui/app.py
 ```
 
 This opens a browser tab with sliders for channel geometry and inlet
-conditions, live-updating plots, a full readout of the plasma state at the
-channel inlet, and an optimizer that sweeps one chosen parameter (within
-bounds you set) to maximize a chosen objective (e.g. load power).
+conditions (each with adjustable bounds via the "⚙️ Bounds" popover under it),
+live-updating plots, a full readout of the plasma state at the channel inlet,
+a single- and a multi-parameter optimizer, and a tab to compare configurations
+side by side. Configurations can be saved/loaded as TOML files from the
+sidebar; they land in `ui/saved_configs/` (git-ignored) by default.

@@ -17,7 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 ui = [
+    "plotly>=7.0.0",
     "streamlit>=1.62.0",
+    "tomli-w>=1.2.0",
 ]
 
 [tool.uv]
