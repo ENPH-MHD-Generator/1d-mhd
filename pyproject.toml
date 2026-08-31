@@ -36,6 +36,18 @@ dev = [
     "ruff>=0.16.5",
 ]
 
+# This project isn't installed as a package (`package = false` above), so
+# `import magnetohydrodynamics` (in every test file, via tests/conftest.py) only
+# resolves if the repo root is on sys.path. `pythonpath` makes pytest add it
+# explicitly and unconditionally, rather than relying on whatever incidental
+# sys.path insertion the invoking tool/CWD happens to produce -- that incidental
+# behavior is what CI's `uv run pytest` hit as
+# `ModuleNotFoundError: No module named 'magnetohydrodynamics'` (not reproducible in
+# an ad-hoc local `uv run pytest`, which is exactly the kind of environment-dependent
+# fragility an explicit `pythonpath` avoids for good).
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 # `uv run pytest --cov --cov-report=term-missing` for a per-file coverage table (this
 # config just scopes it to the library and skips test files themselves so `--cov` alone
 # is enough, without needing `--cov=magnetohydrodynamics` spelled out each time).
