@@ -48,6 +48,8 @@ class Channel(Geometry):
             S_ohm=self["ohmic_power_density"],
             S_load=self["load_power_density"],
             eta_L=self.load_resistivity,
+            ns=self["seed_number_density"],
+            f_I=self["ionization_fraction"],
         )
 
 
@@ -89,7 +91,7 @@ class HallSolver:
     def max_mach_number(self) -> float:
         return self._max_mach_number
 
-    def _solve_slice(
+    def solve_equilibrium(
             self,
             flow_speed: float,
             gas_temperature: float,
@@ -147,6 +149,7 @@ class HallSolver:
         )
         ionization_state = IonizationState(
             seed_type=self._seed_type,
+            seed_number_density=float(seed_number_density),
             electron_temperature=float(electron_temperature),
             electron_number_density=float(electron_number_density),
             momentum_transfer_frequency=float(nu_M),
@@ -193,7 +196,7 @@ class HallSolver:
             gas_number_density = number_flux / max(1e-6, flow_speed)
             seed_number_density = inlet_seed_number_density * (gas_number_density / inlet_gas_number_density)
 
-            plasma = self._solve_slice(
+            plasma = self.solve_equilibrium(
                 flow_speed=flow_speed,
                 gas_temperature=gas_temperature,
                 gas_number_density=gas_number_density,

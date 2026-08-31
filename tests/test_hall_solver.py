@@ -17,7 +17,7 @@ class TestSingleSlice:
         expected, n_p0, n_s0 = self._solve_reference_inlet(main_ref, channel_params)
         eta_L = channel_params["R_L"] * channel_params["A"] / channel_params["L"]
 
-        plasma = hall_solver._solve_slice(
+        plasma = hall_solver.solve_equilibrium(
             flow_speed=channel_params["u0"],
             gas_temperature=channel_params["Tp0"],
             gas_number_density=n_p0,
@@ -44,7 +44,7 @@ class TestFullMarch:
     profiles: it has a known energy-accounting bug in its own axial ODEs (fixed here,
     see Derivation.md's "Correction" note), so its trajectory now genuinely differs
     from HallSolver.march()'s. What's still unchanged -- and still checked here -- is
-    the local, literature-derived Ohm's-law/Saha closure `_solve_slice` uses at every
+    the local, literature-derived Ohm's-law/Saha closure `solve_equilibrium` uses at every
     point the (corrected) march actually visits. Energy conservation of the new axial
     ODEs is checked separately in tests/test_energy_accounting.py.
     """

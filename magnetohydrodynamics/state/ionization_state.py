@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class IonizationState(State):
     seed_type: SeedType
+    seed_number_density: float              # Seed Number Density [1/m^3]
     electron_temperature: float             # Electron Temperature [K]
     electron_number_density: float          # Electron Density [1/m^3]
 

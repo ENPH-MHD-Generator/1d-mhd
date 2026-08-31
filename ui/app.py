@@ -606,7 +606,7 @@ with tab_inlet:
     delta_T_note = (
         f"Electrons run **{delta_T0:.1%} hotter** than the primary gas (T_e/T_p = {inlet.electron_temperature / inlet.gas_temperature:.2f}) "
         f"because Ohmic heating (S_Ω ∝ β⁴) outpaces how fast elastic collisions (ν_E) can relax that energy back into "
-        f"the neutral gas -- this is exactly the ΔT term in `HallSolver._solve_slice`, and it grows with both β and "
+        f"the neutral gas -- this is exactly the ΔT term in `HallSolver.solve_equilibrium`, and it grows with both β and "
         f"the Mach number."
     )
 

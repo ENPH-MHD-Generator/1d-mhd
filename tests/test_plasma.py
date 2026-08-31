@@ -17,6 +17,7 @@ def plasma(gas_type, seed_type) -> Plasma:
     )
     ionization_state = IonizationState(
         seed_type=seed_type,
+        seed_number_density=2.0e21,
         electron_temperature=7000.0,
         electron_number_density=1.2e21,
         momentum_transfer_frequency=5.0e7,

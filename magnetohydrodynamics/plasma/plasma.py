@@ -44,6 +44,10 @@ class Plasma(State):
         return self.ionization_state.seed_type
 
     @property
+    def seed_number_density(self) -> float:
+        return self.ionization_state.seed_number_density
+
+    @property
     def electron_temperature(self) -> float:
         return self.ionization_state.electron_temperature
 
@@ -77,7 +81,13 @@ class Plasma(State):
 
     @property
     def seed_fraction(self) -> float:
+        """n_e/n_p -- NOT Friedberg's ionisation fraction f_I; see `ionization_fraction`."""
         return self.electron_number_density / self.gas_number_density
+
+    @property
+    def ionization_fraction(self) -> float:
+        """Friedberg's f_I = n_e/n_s: the fraction of the SEED gas that's ionised."""
+        return self.electron_number_density / self.seed_number_density
 
     @property
     def resistivity(self):
