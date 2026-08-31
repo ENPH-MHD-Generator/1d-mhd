@@ -31,6 +31,13 @@ python-downloads = "auto"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
 ]
 
+# `uv run pytest --cov --cov-report=term-missing` for a per-file coverage table (this
+# config just scopes it to the library and skips test files themselves so `--cov` alone
+# is enough, without needing `--cov=magnetohydrodynamics` spelled out each time).
+[tool.coverage.run]
+source = ["magnetohydrodynamics"]
+omit = ["tests/*"]
 

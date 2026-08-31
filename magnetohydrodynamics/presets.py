@@ -25,6 +25,39 @@ def default_seed_type() -> SeedType:
     )
 
 
+def potassium_seed_type() -> SeedType:
+    """Potassium seed, the other alkali most commonly discussed in the closed-cycle MHD
+    literature alongside caesium (e.g. Kerrebrock 1964). electron_neutral_cross_section
+    reuses caesium's value deliberately, not by oversight: this model only accounts for
+    electron-*primary-gas* (argon) collisions (nu_M ~ nu_ep, Derivation.md assumption 5),
+    so that cross-section is physically an electron-argon quantity, independent of which
+    seed species is present."""
+    return SeedType(
+        name="Potassium",
+        ionization_potential=4.341,                           # eV
+        electron_neutral_cross_section=3.93994730526347e-21,  # m^2 (electron-argon; see docstring)
+        degeneracy_ratio=1.0,
+    )
+
+
+def sodium_seed_type() -> SeedType:
+    """Sodium seed -- a well-characterized alkali with a higher ionization potential
+    than caesium/potassium, useful as a sensitivity/comparison point. See
+    potassium_seed_type()'s docstring for why electron_neutral_cross_section is reused
+    from caesium rather than being seed-species-specific here."""
+    return SeedType(
+        name="Sodium",
+        ionization_potential=5.139,                           # eV
+        electron_neutral_cross_section=3.93994730526347e-21,  # m^2 (electron-argon; see docstring)
+        degeneracy_ratio=1.0,
+    )
+
+
+def all_seed_types() -> list[SeedType]:
+    """Every seed species preset this module offers, for sensitivity/comparison sweeps."""
+    return [default_seed_type(), potassium_seed_type(), sodium_seed_type()]
+
+
 def build_default_hall_solver() -> tuple[HallSolver, GasType]:
     """Argon primary gas, caesium-seeded -- see Derivation.md."""
     gas_type = default_gas_type()

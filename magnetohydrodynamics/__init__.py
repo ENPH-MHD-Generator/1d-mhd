@@ -5,19 +5,9 @@ from .state import State, GasState, IonizationState, Geometry
 from .plasma import Plasma
 from .solver import HallSolver, Channel
 from .analysis import summarize_performance, terminal_power
-from .stability import (
-    alpha,
-    critical_hall_parameter,
-    critical_hall_parameter_asymptotic,
-    stability_margin,
-    is_stable,
-    plasma_alpha,
-    plasma_critical_hall_parameter,
-    plasma_critical_hall_parameter_asymptotic,
-    plasma_stability_margin,
-    is_plasma_stable,
-)
+from .stability import StabilityModel, FriedbergCriterion, FriedbergAsymptoticCriterion
 from . import presets
+from . import stability
 
 __all__ = [
     "SeedType",
@@ -37,15 +27,9 @@ __all__ = [
     "Channel",
     "summarize_performance",
     "terminal_power",
-    "alpha",
-    "critical_hall_parameter",
-    "critical_hall_parameter_asymptotic",
-    "stability_margin",
-    "is_stable",
-    "plasma_alpha",
-    "plasma_critical_hall_parameter",
-    "plasma_critical_hall_parameter_asymptotic",
-    "plasma_stability_margin",
-    "is_plasma_stable",
+    "StabilityModel",
+    "FriedbergCriterion",
+    "FriedbergAsymptoticCriterion",
     "presets",
+    "stability",
 ]
