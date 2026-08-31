@@ -12,8 +12,6 @@ wheels/
 # JetBrains IDE
 .idea/
 
-# UI-saved operating-point configs (personal, not part of the project)
-ui/saved_configs/
-
-# Generated example figures (not part of the project)
+# Project Files
 examples/output/
+ui/saved_configs/

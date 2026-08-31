@@ -91,16 +91,23 @@ class HallSolver:
     def max_mach_number(self) -> float:
         return self._max_mach_number
 
-    def solve_equilibrium(
+    def _iterate_equilibrium(
             self,
-            flow_speed: float,
-            gas_temperature: float,
-            gas_number_density: float,
-            seed_number_density: float,
-            magnetic_field: float,
-            load_resistivity: float,
-    ) -> Plasma:
-        """Local plasma properties for a single slice (Ey=0, Jz=Ez=0, B=B0)."""
+            flow_speed,
+            gas_temperature,
+            gas_number_density,
+            seed_number_density,
+            magnetic_field,
+            load_resistivity,
+    ) -> dict:
+        """Core fixed-point iteration (Friedberg 3.7-3.14) behind both `solve_equilibrium`
+        and `solve_equilibrium_batch`. All six args may be plain floats or numpy arrays
+        (broadcastable to a common shape) -- every operation here is elementwise, so the
+        exact same code path solves one slice or an entire grid of independent slices in
+        a single pass, with no duplicated physics between the scalar and batched entry
+        points. Returns a dict of (scalar-or-array) results; callers are responsible for
+        wrapping scalars into Plasma/GasState/IonizationState or leaving arrays as-is.
+        """
         m_particle = self._gas_type.particle_mass
 
         # initial guesses
@@ -139,6 +146,36 @@ class HallSolver:
             electron_temperature = self._relax * electron_temperature_new + (1.0 - self._relax) * electron_temperature
             electron_number_density = self._relax * electron_number_density_new + (1.0 - self._relax) * electron_number_density
 
+        return dict(
+            flow_speed=flow_speed,
+            gas_temperature=gas_temperature,
+            gas_number_density=gas_number_density,
+            seed_number_density=seed_number_density,
+            magnetic_field=magnetic_field,
+            electron_temperature=electron_temperature,
+            electron_number_density=electron_number_density,
+            momentum_transfer_frequency=nu_M,
+            energy_transfer_frequency=nu_E,
+            current_x=current_x,
+            current_y=current_y,
+            axial_electric_field=axial_field,
+            ohmic_power_density=ohmic_power_density,
+            load_power_density=load_power_density,
+        )
+
+    def solve_equilibrium(
+            self,
+            flow_speed: float,
+            gas_temperature: float,
+            gas_number_density: float,
+            seed_number_density: float,
+            magnetic_field: float,
+            load_resistivity: float,
+    ) -> Plasma:
+        """Local plasma properties for a single slice (Ey=0, Jz=Ez=0, B=B0)."""
+        result = self._iterate_equilibrium(
+            flow_speed, gas_temperature, gas_number_density, seed_number_density, magnetic_field, load_resistivity,
+        )
         gas_state = GasState(
             gas_type=self._gas_type,
             gas_temperature=float(gas_temperature),
@@ -150,16 +187,59 @@ class HallSolver:
         ionization_state = IonizationState(
             seed_type=self._seed_type,
             seed_number_density=float(seed_number_density),
-            electron_temperature=float(electron_temperature),
-            electron_number_density=float(electron_number_density),
-            momentum_transfer_frequency=float(nu_M),
-            energy_transfer_frequency=float(nu_E),
-            current_density=(float(current_x), float(current_y)),
-            axial_electric_field=float(axial_field),
-            ohmic_power_density=float(ohmic_power_density),
-            load_power_density=float(load_power_density),
+            electron_temperature=float(result["electron_temperature"]),
+            electron_number_density=float(result["electron_number_density"]),
+            momentum_transfer_frequency=float(result["momentum_transfer_frequency"]),
+            energy_transfer_frequency=float(result["energy_transfer_frequency"]),
+            current_density=(float(result["current_x"]), float(result["current_y"])),
+            axial_electric_field=float(result["axial_electric_field"]),
+            ohmic_power_density=float(result["ohmic_power_density"]),
+            load_power_density=float(result["load_power_density"]),
         )
         return Plasma(ionization_state=ionization_state, gas_state=gas_state)
+
+    def solve_equilibrium_batch(
+            self,
+            flow_speed,
+            gas_temperature,
+            gas_number_density,
+            seed_number_density,
+            magnetic_field,
+            load_resistivity,
+    ) -> dict:
+        """Vectorized `solve_equilibrium`: every argument may be a numpy array (or plain
+        float) as long as they're all broadcastable to a common shape -- e.g. pass whole
+        meshgrids to solve an entire 2-D or 3-D sweep of independent equilibria in one
+        call, instead of one Python-level `solve_equilibrium` call per grid point.
+
+        Runs the exact same `_iterate_equilibrium` fixed-point loop (Friedberg 3.7-3.14),
+        just without the final scalar float()/Plasma wrapping -- there is no second copy
+        of the physics to drift out of sync with `solve_equilibrium`. Returns a dict of
+        arrays with the broadcast shape: electron_temperature, electron_number_density,
+        hall_parameter (derived here since callers use it constantly), resistivity,
+        current_x, current_y, axial_electric_field, ohmic_power_density,
+        load_power_density, plus the (broadcast) input arrays gas_temperature,
+        seed_number_density, magnetic_field, flow_speed for convenience.
+
+        This does NOT return Plasma objects -- Plasma/GasState/IonizationState are
+        scalar-oriented dataclasses (their properties and __repr__ assume plain floats),
+        and array-of-Plasma isn't a shape this codebase's state model represents. Read
+        results straight out of the returned dict instead."""
+        flow_speed, gas_temperature, gas_number_density, seed_number_density, magnetic_field, load_resistivity = np.broadcast_arrays(
+            np.asarray(flow_speed, dtype=float), np.asarray(gas_temperature, dtype=float),
+            np.asarray(gas_number_density, dtype=float), np.asarray(seed_number_density, dtype=float),
+            np.asarray(magnetic_field, dtype=float), np.asarray(load_resistivity, dtype=float),
+        )
+        result = self._iterate_equilibrium(
+            flow_speed, gas_temperature, gas_number_density, seed_number_density, magnetic_field, load_resistivity,
+        )
+        resistivity = constants.electron_mass * result["momentum_transfer_frequency"] / (
+            constants.e ** 2 * result["electron_number_density"]
+        )
+        hall_parameter = constants.e * magnetic_field / (constants.electron_mass * result["momentum_transfer_frequency"])
+        result["resistivity"] = resistivity
+        result["hall_parameter"] = hall_parameter
+        return result
 
     def march(
             self,

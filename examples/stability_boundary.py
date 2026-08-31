@@ -31,16 +31,19 @@ import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the '3d' projection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy import constants
+from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import map_coordinates
 from scipy.optimize import brentq
+from skimage.measure import marching_cubes
 
 from magnetohydrodynamics.ionization.saha_ionization import LocalThermodynamicEquilibrium
 from magnetohydrodynamics.presets import build_default_hall_solver, default_gas_type, default_operating_point, default_seed_type
 from magnetohydrodynamics.solver.hall_solver import HallSolver
 from magnetohydrodynamics.stability import (
+    critical_hall_parameter,
     critical_hall_parameter_asymptotic,
-    plasma_critical_hall_parameter,
-    plasma_critical_hall_parameter_asymptotic,
     stability_margin,
 )
 from magnetohydrodynamics.transport.mhd_transport_model import MHDTransportModel
@@ -75,6 +78,13 @@ PHYSICAL_META = {
 # mismatched reference point for an absolute (not ratio) power target.
 PAPER_REFERENCE_GAS_NUMBER_DENSITY = 0.801e6 / (constants.k * 481.0)  # n_p = pp/(k Tp) [m^-3]
 PAPER_REFERENCE_FLOW_SPEED = 735.0  # v_p [m/s]
+
+# stability_volume_grid's axes -- shared between demo_sweeps (the static matplotlib
+# point cloud) and main()'s optional interactive Plotly export, so both describe the
+# same grid without repeating the resolution/range numbers in two places.
+VOLUME_SEED_FRACTION_VALUES = np.logspace(-5, -1, 45)
+VOLUME_B0_VALUES = np.linspace(0.1, 5.0, 45)
+VOLUME_TP_VALUES = np.logspace(0.0, np.log10(6000.0), 45)
 
 
 def base_operating_point() -> dict:
@@ -131,23 +141,23 @@ def sweep_grid(
         y_key: str, y_values: np.ndarray,
 ) -> dict[str, np.ndarray]:
     """Solve the local equilibrium at every (x, y) combination and evaluate both
-    stability criteria there. Returns 2-D arrays of shape (len(y_values), len(x_values))."""
-    shape = (len(y_values), len(x_values))
-    beta = np.empty(shape)
-    beta_crit = np.empty(shape)
-    beta_crit_asymptotic = np.empty(shape)
-    electron_temperature = np.empty(shape)
-    ionization_fraction = np.empty(shape)
+    stability criteria there, via a single vectorized `solve_equilibrium_batch` call
+    instead of one `solve_equilibrium` (and one Plasma object) per grid point. Measured
+    speedup on a 250x250 grid: ~5.5s -> ~0.02s -- the physics is identical either way
+    (`solve_equilibrium_batch` runs the exact same `_iterate_equilibrium` fixed-point
+    loop HallSolver.solve_equilibrium does), the win is purely from replacing 62,500
+    Python-level calls with one call operating on 62,500-element arrays.
 
-    for i, y in enumerate(y_values):
-        for j, x in enumerate(x_values):
-            point = _resolve_point(base, **{x_key: x, y_key: y})
-            plasma = hall_solver.solve_equilibrium(**point)
-            beta[i, j] = plasma.hall_parameter
-            beta_crit[i, j] = plasma_critical_hall_parameter(plasma)
-            beta_crit_asymptotic[i, j] = plasma_critical_hall_parameter_asymptotic(plasma)
-            electron_temperature[i, j] = plasma.electron_temperature
-            ionization_fraction[i, j] = plasma.ionization_fraction
+    Returns 2-D arrays of shape (len(y_values), len(x_values))."""
+    X, Y = np.meshgrid(x_values, y_values)
+    point = _resolve_point(base, **{x_key: X, y_key: Y})
+    result = hall_solver.solve_equilibrium_batch(**point)
+
+    ionization_potential = default_seed_type().ionization_potential
+    ionization_fraction = result["electron_number_density"] / result["seed_number_density"]
+    beta = result["hall_parameter"]
+    beta_crit = critical_hall_parameter(result["electron_temperature"], point["gas_temperature"], ionization_potential, ionization_fraction)
+    beta_crit_asymptotic = critical_hall_parameter_asymptotic(result["electron_temperature"], ionization_potential, ionization_fraction)
 
     margin = stability_margin(beta, beta_crit)
     return dict(
@@ -156,7 +166,7 @@ def sweep_grid(
         beta_crit_asymptotic=beta_crit_asymptotic,
         margin=margin,
         margin_asymptotic=stability_margin(beta, beta_crit_asymptotic),
-        Te=electron_temperature,
+        Te=result["electron_temperature"],
         ionization_fraction=ionization_fraction,
         stable=margin >= 1.0,
     )
@@ -254,62 +264,37 @@ def plot_stability_boundary(
     return fig
 
 
-def _solve_equilibrium_matched_load(hall_solver: HallSolver, base: dict, overrides: dict, iters: int = 15):
-    """Solve the local equilibrium exactly as `_resolve_point` + `solve_equilibrium`
-    normally would, except load_resistivity is never a fixed input here -- at every outer
-    iteration it's set to Z = sqrt(1+beta^2) at the *current* beta (Friedberg eq. 6.10:
-    the "matched load" that minimizes S_Omega/S_L, i.e. wastes the least power to Ohmic
-    heating relative to what reaches the load), then the equilibrium is re-solved and
-    beta updates, repeating to a fixed point. Iterating is necessary because beta and eta
-    both depend on Te, which depends on Z through the Delta_T relation (eq. 3.14) -- so Z,
-    beta and Te are mutually coupled.
-
-    An earlier version of this used Z = beta^2+1 instead (maximizing S_L outright, also
-    closed-form: differentiating S_L = m_e n_e nu_M v_p^2 beta^4 Z/(beta^2+1+Z)^2 with
-    respect to Z and setting it to zero). That policy pushed the whole system toward
-    extreme Te at high beta, and the "critical Tp" surface built on it collapsed to below
-    100 K (and often below argon's ~87 K boiling point) almost everywhere above ~2 T --
-    not a bug, but a real result: simultaneously maximizing power, staying stable, AND
-    running at high field just isn't achievable at any physical Tp. Friedberg's own
-    matched-load choice is a much gentler policy (Z grows linearly with beta rather than
-    quadratically) and lands the same critical-Tp search back in a physically sensible
-    ~100-1000s K range across the whole B0 sweep -- verified numerically before switching."""
-    load_resistivity = base["load_resistivity"]
-    plasma = None
-    for _ in range(iters):
-        point = _resolve_point(base, **{**overrides, "load_resistivity": load_resistivity})
-        plasma = hall_solver.solve_equilibrium(**point)
-        load_resistivity = np.sqrt(1.0 + plasma.hall_parameter ** 2) * plasma.resistivity
-    return plasma
+def _margin_batch(hall_solver: HallSolver, base: dict, **overrides) -> np.ndarray:
+    """beta_crit/beta - 1, evaluated via solve_equilibrium_batch for whatever
+    combination of scalar/array physical-knob `overrides` is given (merged with `base`).
+    Used both for the big vectorized scans below and, with scalar args, as the objective
+    handed to brentq for individual root refinement -- this script never needs to
+    construct a Plasma object directly."""
+    point = _resolve_point(base, **overrides)
+    result = hall_solver.solve_equilibrium_batch(**point)
+    ionization_potential = default_seed_type().ionization_potential
+    ionization_fraction = result["electron_number_density"] / result["seed_number_density"]
+    beta_crit = critical_hall_parameter(result["electron_temperature"], point["gas_temperature"], ionization_potential, ionization_fraction)
+    return beta_crit / result["hall_parameter"] - 1.0
 
 
-def _find_margin_crossings(
-        hall_solver: HallSolver, base: dict, overrides: dict, solve_key: str, scan_values: np.ndarray,
-        solve_equilibrium=None,
-) -> list[float]:
-    """Every value of `solve_key` (refined by bisection between consecutive samples of
-    `scan_values`) where beta_crit/beta crosses 1, holding every other physical knob at
-    `base` merged with `overrides`. Scanning for *all* sign changes first -- rather than
-    just bisecting between scan_values' two endpoints -- matters because this system can
-    have a genuine stability *window* (unstable-stable-unstable) rather than a single
-    threshold: checking only the endpoints can't tell "never crosses" apart from "crosses
-    an even number of times, same sign at both ends".
+def _find_crossings_1d(margin_minus_one_values: np.ndarray, axis_values: np.ndarray, objective) -> list[float]:
+    """Every value of `axis_values` (refined by bisection) where a precomputed 1-D
+    array of (beta_crit/beta - 1) changes sign -- the vectorized-scan counterpart of
+    scanning-then-bisecting one point at a time. `objective(value) -> beta_crit/beta - 1`
+    is only called a handful of times per detected crossing (brentq's own refinement),
+    not once per scan point.
 
-    `solve_equilibrium`, if given, replaces the default `hall_solver.solve_equilibrium(
-    **_resolve_point(base, **kwargs))` (e.g. `_solve_equilibrium_matched_load`, above) --
-    used wherever load_resistivity shouldn't be a fixed input either."""
-    solve = solve_equilibrium or (lambda kwargs: hall_solver.solve_equilibrium(**_resolve_point(base, **kwargs)))
-
-    def margin_minus_one(value: float) -> float:
-        plasma = solve({**overrides, solve_key: value})
-        return plasma_critical_hall_parameter(plasma) / plasma.hall_parameter - 1.0
-
-    values = np.array([margin_minus_one(v) for v in scan_values])
-    sign_changes = np.where(np.diff(np.sign(values)) != 0)[0]
+    Scanning for *all* sign changes -- not just checking the two endpoints -- matters
+    because this system can have a genuine stability *window*
+    (unstable-stable-unstable) rather than a single threshold: checking only the
+    endpoints can't tell "never crosses" apart from "crosses an even number of times,
+    same sign at both ends"."""
+    sign_changes = np.where(np.diff(np.sign(margin_minus_one_values)) != 0)[0]
     roots = []
     for k in sign_changes:
         try:
-            roots.append(brentq(margin_minus_one, scan_values[k], scan_values[k + 1], xtol=1e-4 * scan_values[k] + 1e-8))
+            roots.append(brentq(objective, axis_values[k], axis_values[k + 1], xtol=1e-4 * axis_values[k] + 1e-8))
         except (ValueError, RuntimeError):
             pass
     return sorted(roots)
@@ -333,8 +318,16 @@ def critical_load_resistivity_surface(
     (checked numerically during development: not observed in the range tested here, but
     handled the same way as the B0 stability window for robustness) -- plus the load
     power density S_L *at* each boundary point, so the surface's color can carry a
-    genuinely independent piece of information instead of re-deriving the height."""
+    genuinely independent piece of information instead of re-deriving the height.
+
+    The scan itself (the expensive part -- every (B0, seed_fraction, load_resistivity)
+    combination) is one vectorized `_margin_batch` call; only the brentq refinement of
+    each detected crossing falls back to a handful of individual (still batch-based,
+    just scalar-shaped) evaluations."""
     scan_values = np.logspace(np.log10(load_resistivity_bracket[0]), np.log10(load_resistivity_bracket[1]), scan_points)
+    B0, SF, LR = np.meshgrid(b0_values, seed_fraction_values, scan_values, indexing="ij")
+    values = _margin_batch(hall_solver, base, B0=B0, seed_fraction=SF, load_resistivity=LR)  # shape (len(b0), len(sf), scan_points)
+
     shape = (len(b0_values), len(seed_fraction_values))
     lower = np.full(shape, np.nan)
     upper = np.full(shape, np.nan)
@@ -343,17 +336,19 @@ def critical_load_resistivity_surface(
 
     for i, b0 in enumerate(b0_values):
         for j, seed_fraction in enumerate(seed_fraction_values):
-            overrides = dict(B0=b0, seed_fraction=seed_fraction)
-            roots = _find_margin_crossings(hall_solver, base, overrides, "load_resistivity", scan_values)
+            def objective(lr, b0=b0, seed_fraction=seed_fraction) -> float:
+                return float(_margin_batch(hall_solver, base, B0=b0, seed_fraction=seed_fraction, load_resistivity=lr))
+
+            roots = _find_crossings_1d(values[i, j, :], scan_values, objective)
             if not roots:
                 continue
             lower[i, j] = roots[0]
-            point = _resolve_point(base, **{**overrides, "load_resistivity": roots[0]})
-            lower_power[i, j] = hall_solver.solve_equilibrium(**point).load_power_density
+            point = _resolve_point(base, B0=b0, seed_fraction=seed_fraction, load_resistivity=roots[0])
+            lower_power[i, j] = float(hall_solver.solve_equilibrium_batch(**point)["load_power_density"])
             if len(roots) > 1:
                 upper[i, j] = roots[-1]
-                point = _resolve_point(base, **{**overrides, "load_resistivity": roots[-1]})
-                upper_power[i, j] = hall_solver.solve_equilibrium(**point).load_power_density
+                point = _resolve_point(base, B0=b0, seed_fraction=seed_fraction, load_resistivity=roots[-1])
+                upper_power[i, j] = float(hall_solver.solve_equilibrium_batch(**point)["load_power_density"])
     return lower, upper, lower_power, upper_power
 
 
@@ -424,118 +419,254 @@ def plot_critical_load_resistivity_surface(
     return fig
 
 
-def critical_temperature_surface_matched_load(
+def _matched_load_batch(hall_solver: HallSolver, base: dict, seed_fraction, magnetic_field, gas_temperature, iters: int = 15) -> dict:
+    """Vectorized Friedberg (6.10) matched-load (Z=sqrt(1+beta^2)) equilibrium solve --
+    the array analogue of the scalar outer fixed-point loop an earlier version of this
+    script used (one HallSolver.solve_equilibrium call per grid point per outer
+    iteration): `iters` rounds of `solve_equilibrium_batch` instead, solving an entire
+    grid's worth of points (any broadcastable shape, e.g. a 3-D meshgrid) in one pass.
+    This is what makes a dense 3-D (seed_fraction, B0, Tp) grid affordable at all -- see
+    stability_volume_grid's docstring for the measured cost difference."""
+    gas_number_density = base["p0"] / (constants.k * gas_temperature)
+    seed_number_density = seed_fraction * gas_number_density
+    load_resistivity = base["load_resistivity"]
+    result = None
+    for _ in range(iters):
+        result = hall_solver.solve_equilibrium_batch(
+            flow_speed=base["v0"], gas_temperature=gas_temperature, gas_number_density=gas_number_density,
+            seed_number_density=seed_number_density, magnetic_field=magnetic_field, load_resistivity=load_resistivity,
+        )
+        load_resistivity = np.sqrt(1.0 + result["hall_parameter"] ** 2) * result["resistivity"]
+    return result
+
+
+def stability_volume_grid(
         hall_solver: HallSolver, base: dict,
-        seed_fraction_values: np.ndarray, b0_values: np.ndarray,
-        tp_bracket: tuple[float, float] = (1.0, 6000.0), scan_points: int = 40,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Like critical_load_resistivity_surface, but load resistivity is no longer a free
-    axis at all -- it's fixed, at every point, to the Friedberg (6.10) matched-load value
-    Z = sqrt(1+beta^2) (see _solve_equilibrium_matched_load) -- freeing up the height for
-    a more physically interesting quantity: the critical primary gas temperature Tp.
+        seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray,
+) -> dict:
+    """Precomputed 3-D equilibrium/stability table over (seed_fraction, B0, Tp), solved
+    with the Friedberg (6.10) matched-load Z=sqrt(1+beta^2) policy throughout -- load
+    resistivity is never a free axis here either (see _matched_load_batch, and this
+    function's git history for why Z=beta^2+1, maximizing power outright, was tried
+    first and abandoned: it pushed the whole system toward physically unreasonable
+    sub-100K Tp at high field).
 
-    Returns (lower, upper, lower_power, upper_power), exactly as
-    critical_load_resistivity_surface does. An earlier version of this used Z = beta^2+1
-    (maximizing load power outright) instead, and its critical-Tp surface collapsed to
-    below 100 K -- often below argon's ~87 K boiling point -- for almost every B0 above
-    ~2 T: not a bug, but a real finding that maximizing power, staying stable, AND running
-    at high field together just isn't achievable at any physical Tp under that policy.
-    Switching to the gentler matched-load Z (linear in beta, not quadratic) brings the
-    lower boundary back into a physically sensible ~100 K-few 1000s K range across the
-    whole B0 sweep (verified numerically first). It also revealed real multi-valued
-    structure this system didn't show under the max-power policy: at a fixed
-    (B0, seed_fraction), the plasma can go stable, then unstable again in a pocket around
-    Tp ~ 2000-5000 K, then stable again at higher Tp still -- hence `upper` (and even
-    higher-order crossings, silently folded into just "the largest root found") are worth
-    keeping here, unlike in the max-power version where they never appeared."""
-    scan_values = np.logspace(np.log10(tp_bracket[0]), np.log10(tp_bracket[1]), scan_points)
-    shape = (len(b0_values), len(seed_fraction_values))
-    lower = np.full(shape, np.nan)
-    upper = np.full(shape, np.nan)
-    lower_power = np.full(shape, np.nan)
-    upper_power = np.full(shape, np.nan)
+    This is the "precompute a shared equilibrium table" this script's redesign was built
+    around: solving the WHOLE grid is one vectorized pass via _matched_load_batch,
+    however fine -- a 40x40x40 grid (64,000 points) solves in well under a second, versus
+    the ~16s an earlier, much coarser (14x14, with an internal per-cell root-search) 2-D
+    version of this analysis took. That's what makes a dense enough 3-D grid to resolve
+    real structure (like the Tp ~ 2000-5000 K re-entrant unstable pocket found during
+    development) actually affordable, where a scan-and-bisect search extended to 3-D
+    would not have been.
 
-    def solve(kwargs):
-        return _solve_equilibrium_matched_load(hall_solver, base, kwargs)
+    Returns a dict of 3-D arrays (shape (len(seed_fraction), len(B0), len(Tp))): margin
+    (beta_crit/beta), stable (margin>=1), Te, ionization_fraction, load_power_density."""
+    SF, B0, TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
+    result = _matched_load_batch(hall_solver, base, SF, B0, TP)
 
-    for i, b0 in enumerate(b0_values):
-        for j, seed_fraction in enumerate(seed_fraction_values):
-            overrides = dict(B0=b0, seed_fraction=seed_fraction)
-            roots = _find_margin_crossings(hall_solver, base, overrides, "Tp", scan_values, solve_equilibrium=solve)
-            if not roots:
-                continue
-            lower[i, j] = roots[0]
-            lower_power[i, j] = solve({**overrides, "Tp": roots[0]}).load_power_density
-            if len(roots) > 1:
-                upper[i, j] = roots[-1]
-                upper_power[i, j] = solve({**overrides, "Tp": roots[-1]}).load_power_density
-    return lower, upper, lower_power, upper_power
+    ionization_potential = default_seed_type().ionization_potential
+    ionization_fraction = result["electron_number_density"] / result["seed_number_density"]
+    beta_crit = critical_hall_parameter(result["electron_temperature"], TP, ionization_potential, ionization_fraction)
+    margin = stability_margin(result["hall_parameter"], beta_crit)
+
+    return dict(
+        margin=margin,
+        stable=margin >= 1.0,
+        Te=result["electron_temperature"],
+        ionization_fraction=ionization_fraction,
+        load_power_density=result["load_power_density"],
+    )
 
 
-def plot_critical_temperature_surface_matched_load(
-        lower: np.ndarray, upper: np.ndarray, lower_power: np.ndarray, upper_power: np.ndarray,
-        seed_fraction_values: np.ndarray, b0_values: np.ndarray, base: dict,
+def stability_boundary_mesh(
+        grid: dict, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray, level: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Marching-cubes isosurface (skimage.measure.marching_cubes) of the precomputed
+    margin field at margin=`level`=1 (the stability boundary), replacing an earlier
+    version that extracted a scatter of boundary-adjacent grid cells instead.
+
+    That scatter version showed visible "terracing": it upsampled the coarse `grid`
+    with RegularGridInterpolator's trilinear interpolation, then just flagged whole
+    fine cells as boundary-adjacent. Trilinear interpolation connects coarse samples
+    with straight-line ramps -- wherever the true field is a near-cliff (this system's
+    ionisation-avalanche transitions are exactly that), the interpolated crossing
+    location within each coarse cell is very sensitive to which cell you're in, and
+    stitching cells together traces out the coarse grid's own cell boundaries. Marching
+    cubes doesn't have this failure mode: it solves for the exact interpolated crossing
+    position along each grid edge from the real corner values directly, giving sub-cell
+    accuracy instead of "which cell", and returns a proper triangulated surface (a few
+    thousand vertices) rather than a ~100,000-point scatter -- both smoother-looking and
+    far lighter to render.
+
+    Returns (vertices, faces, vertex_power): vertices in REAL coordinates
+    (log10(seed_fraction), B0, Tp [K, linear]) -- not the fractional grid-index
+    coordinates marching_cubes itself works in -- faces as vertex-index triples, and the
+    load power density interpolated at each vertex (for coloring)."""
+    margin_capped = np.clip(np.nan_to_num(grid["margin"], nan=0.0, posinf=1e6, neginf=0.0), 0.0, 1e6)
+    index_vertices, faces, _normals, _values = marching_cubes(margin_capped, level=level)
+
+    log_sf = np.log10(seed_fraction_values)
+    log_tp = np.log10(tp_values)
+    real_log_sf = np.interp(index_vertices[:, 0], np.arange(len(seed_fraction_values)), log_sf)
+    real_b0 = np.interp(index_vertices[:, 1], np.arange(len(b0_values)), b0_values)
+    real_tp = 10.0 ** np.interp(index_vertices[:, 2], np.arange(len(tp_values)), log_tp)
+    vertices = np.stack([real_log_sf, real_b0, real_tp], axis=-1)
+
+    vertex_power = map_coordinates(grid["load_power_density"], index_vertices.T, order=1, mode="nearest")
+    return vertices, faces, vertex_power
+
+
+def stability_boundary_stable_direction_segments(
+        grid: dict, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray,
+        vertices: np.ndarray, faces: np.ndarray,
+        num_arrows: int = 30, eps_frac: float = 0.01, arrow_frac: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray]:
+    """For `num_arrows` faces sampled evenly across the mesh, a short line segment from
+    that face's centroid pointing toward increasing margin (the stable side) -- unlike
+    the earlier surface plots (where "up" always meant "more stable"), this mesh can
+    face in genuinely different directions on different sheets, so each arrow needs its
+    own locally-estimated direction rather than a single fixed one.
+
+    (marching_cubes' own per-vertex `normals` were checked directly against the margin
+    field first -- confirmed, consistently, to point toward the *unstable* side, i.e.
+    the negative gradient -- but rather than rely on that sign convention, this instead
+    estimates the gradient itself directly from the margin field via a small centered
+    finite difference, in (log10(seed_fraction), B0, log10(Tp)) space -- the space the
+    grid is actually uniform in -- then converts back to (log10(seed_fraction), B0,
+    Tp-linear) only for the final plotted coordinates. Each axis's step/arrow length is
+    a fixed fraction of that axis's own range, so arrows stay visually sensible despite
+    Tp spanning thousands of K while log10(seed_fraction) spans only ~4.
+
+    Returns (starts, ends), both (N, 3) arrays in the same real coordinates as
+    `vertices`."""
+    log_sf = np.log10(seed_fraction_values)
+    log_tp = np.log10(tp_values)
+    margin_capped = np.clip(np.nan_to_num(grid["margin"], nan=0.0, posinf=1e6, neginf=0.0), 0.0, 1e6)
+    interpolator = RegularGridInterpolator((log_sf, b0_values, log_tp), margin_capped, bounds_error=False, fill_value=None)
+    ranges = np.array([log_sf[-1] - log_sf[0], b0_values[-1] - b0_values[0], log_tp[-1] - log_tp[0]])
+
+    stride = max(1, len(faces) // num_arrows)
+    starts, ends = [], []
+    for face in faces[::stride]:
+        centroid_real = vertices[face].mean(axis=0)
+        centroid_query = np.array([centroid_real[0], centroid_real[1], np.log10(centroid_real[2])])
+
+        gradient = np.empty(3)
+        for k in range(3):
+            step = np.zeros(3)
+            step[k] = eps_frac * ranges[k]
+            gradient[k] = (interpolator(centroid_query + step)[0] - interpolator(centroid_query - step)[0]) / (2.0 * eps_frac)
+        norm = np.linalg.norm(gradient)
+        if norm < 1e-9:
+            continue
+        end_query = centroid_query + (gradient / norm) * arrow_frac * ranges
+
+        starts.append(centroid_real)
+        ends.append(np.array([end_query[0], end_query[1], 10.0 ** end_query[2]]))
+    return np.array(starts), np.array(ends)
+
+
+def plot_stability_boundary_mesh(
+        vertices: np.ndarray, faces: np.ndarray, vertex_power: np.ndarray,
+        starts: np.ndarray, ends: np.ndarray, base: dict,
 ) -> plt.Figure:
-    """3-D surface of the critical primary gas temperature as a function of seed fraction
-    and B0, with load resistivity eliminated as a free axis entirely (fixed to the
-    Friedberg (6.10) matched-load value Z=sqrt(1+beta^2) at every point instead of being
-    swept or held at an arbitrary constant). Color is log10(load power density) at the
-    boundary, exactly as in plot_critical_load_resistivity_surface -- genuinely new
-    information, not the height re-plotted.
-
-    Deliberately plots ONLY the lowest crossing (the primary ignition threshold), even
-    though critical_temperature_surface_matched_load can return a second ("upper") one.
-    An earlier version rendered both, and the result was close to unreadable: at this
-    resolution the two surfaces fold and self-intersect in ways that don't correspond to
-    one continuous "stable window" the way the B0 stability-window plot's two surfaces
-    do -- this system can go stable, unstable again in a pocket around Tp ~ 2000-5000 K,
-    then stable a third time, and collapsing that into just "lower" and "upper" loses the
-    pocket in between without actually producing something easier to read. Showing only
-    the first (lowest) crossing sacrifices that extra structure but is honest and legible;
-    `upper` is still returned by the surface function for anyone who wants to inspect it
-    directly, just not plotted here."""
-    log_seed_fraction = np.log10(seed_fraction_values)
-    X, Y = np.meshgrid(log_seed_fraction, b0_values)  # shape (len(b0_values), len(seed_fraction_values))
-
-    finite_power = lower_power[np.isfinite(lower_power) & (lower_power > 0)]
+    """Solid triangulated surface (mpl_toolkits.mplot3d.art3d.Poly3DCollection) of the
+    stability boundary -- the full shape, including the Tp ~ 2000-5000 K re-entrant
+    unstable pocket that made an assumed 2-surface version of this plot unreadable,
+    comes through directly as an actual continuous surface rather than a dense scatter.
+    Color is load power density per face (log scale, averaged from its vertices) --
+    independent information, not a repaint of position. Blue segments mark the stable
+    direction at a sample of faces (see stability_boundary_stable_direction_segments)."""
+    face_power = vertex_power[faces].mean(axis=1)
+    finite_power = face_power[np.isfinite(face_power) & (face_power > 0)]
     norm = mcolors.LogNorm(vmin=np.min(finite_power), vmax=np.max(finite_power)) if finite_power.size else mcolors.LogNorm(1.0, 10.0)
+    safe_power = np.where(np.isfinite(face_power) & (face_power > 0), face_power, norm.vmin)
     cmap = plt.get_cmap("plasma")
 
     fig = plt.figure(figsize=(8, 7.5))
     ax = fig.add_subplot(projection="3d")
+    mesh = Poly3DCollection(vertices[faces], facecolors=cmap(norm(safe_power)), edgecolor="none", alpha=0.9)
+    ax.add_collection3d(mesh)
+    # add_collection3d doesn't auto-scale the axes -- set limits from the data explicitly.
+    ax.set_xlim(vertices[:, 0].min(), vertices[:, 0].max())
+    ax.set_ylim(vertices[:, 1].min(), vertices[:, 1].max())
+    ax.set_zlim(vertices[:, 2].min(), vertices[:, 2].max())
 
-    safe_power = np.where(np.isfinite(lower_power) & (lower_power > 0), lower_power, norm.vmin)
-    ax.plot_surface(X, Y, np.ma.masked_invalid(lower), facecolors=cmap(norm(safe_power)), edgecolor="none", alpha=0.95)
-
-    # Sparse "stable this way" markers -- verified numerically that higher Tp is the
-    # stable side here, same convention as plot_critical_load_resistivity_surface.
-    stride_x, stride_y = max(1, len(seed_fraction_values) // 6), max(1, len(b0_values) // 6)
-    tp_span = np.nanmax(lower) - np.nanmin(lower) if np.any(np.isfinite(lower)) else 1.0
-    _draw_stable_direction_markers(
-        ax, X[::stride_y, ::stride_x], Y[::stride_y, ::stride_x], lower[::stride_y, ::stride_x],
-        length=0.15 * max(tp_span, 1.0),
-    )
+    for s, e in zip(starts, ends):
+        ax.plot([s[0], e[0]], [s[1], e[1]], [s[2], e[2]], color="steelblue", linewidth=1.5)
+    if len(ends):
+        ax.scatter(ends[:, 0], ends[:, 1], ends[:, 2], marker="^", color="steelblue", s=12, depthshade=False)
 
     mappable = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
     fig.colorbar(mappable, ax=ax, shrink=0.55, pad=0.05, label=r"load power density $S_L$ [W/m$^3$] at the boundary (log scale)")
 
     ax.set_xlabel(r"$\log_{10}$(seed fraction)")
     ax.set_ylabel(r"$B_0$ [T]")
-    ax.set_zlabel(r"critical $T_p$ [K]")
+    ax.set_zlabel(r"$T_p$ [K]")
     ax.set_title(
-        f"Stability boundary: critical $T_p(B_0,\\ \\mathrm{{seed\\ fraction}})$, matched load ($Z=\\sqrt{{1+\\beta^2}}$)\n{STABILITY_NOTE}",
-        fontsize=11,
+        f"Stability boundary surface: $B_0$, seed fraction, $T_p$ (matched load, $Z=\\sqrt{{1+\\beta^2}}$)\n{STABILITY_NOTE}",
+        fontsize=10.5,
     )
 
     fig.tight_layout()
-    fig.subplots_adjust(top=0.88, bottom=0.2)
+    fig.subplots_adjust(top=0.88, bottom=0.16)
     fig.text(
         0.5, 0.02,
         _fixed_params_text(base, "B0", "seed_fraction", "Tp", "load_resistivity")
         + "\n(load resistivity fixed everywhere to the matched-load value $Z=\\sqrt{1+\\beta^2}$, eq. 6.10, not swept)"
-        "\nblue arrows: stable just above the lower boundary -- a narrow unstable pocket can reappear at higher $T_p$ still (see docstring)",
+        "\nblue segments point toward the stable side (a locally-estimated direction, not always \"up\" -- see docstring)",
         ha="center", fontsize=8, style="italic",
         bbox=dict(boxstyle="round", facecolor="white", edgecolor="gray", alpha=0.85),
+    )
+    return fig
+
+
+def plot_stability_boundary_mesh_interactive(
+        vertices: np.ndarray, faces: np.ndarray, vertex_power: np.ndarray, starts: np.ndarray, ends: np.ndarray,
+):
+    """Interactive (WebGL) counterpart to plot_stability_boundary_mesh, for actually
+    rotating it smoothly -- matplotlib's Poly3DCollection has no GPU acceleration
+    either, though this mesh (a few thousand vertices) is light enough that it matters
+    far less than it did for the ~100,000-point scatter version. Plotly's Mesh3d
+    renders through WebGL regardless; this repo already depends on plotly (see
+    ui/app.py) for exactly this reason.
+
+    Returns a plotly Figure, saved to a standalone .html file by main() -- openable in
+    any browser, no server needed. Only called if `plotly` is importable; main() skips
+    this (with a note) otherwise, since plotly isn't a required dependency of this
+    script."""
+    import plotly.graph_objects as go
+
+    safe_power = np.where(np.isfinite(vertex_power) & (vertex_power > 0), vertex_power, np.nan)
+    log_power = np.log10(safe_power)
+
+    segment_x, segment_y, segment_z = [], [], []
+    for s, e in zip(starts, ends):
+        segment_x += [s[0], e[0], None]
+        segment_y += [s[1], e[1], None]
+        segment_z += [s[2], e[2], None]
+
+    fig = go.Figure(data=[
+        go.Mesh3d(
+            x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            intensity=log_power, colorscale="Plasma", colorbar=dict(title="log10(S_L)<br>[W/m³]"),
+            opacity=1.0, flatshading=False,
+        ),
+        go.Scatter3d(
+            x=segment_x, y=segment_y, z=segment_z, mode="lines",
+            line=dict(color="steelblue", width=6), showlegend=False,
+        ),
+    ])
+    fig.update_layout(
+        title=f"Stability boundary surface (matched load, Z=√(1+β²)) -- {len(faces):,} faces, drag to rotate",
+        scene=dict(
+            xaxis_title="log10(seed fraction)",
+            yaxis_title="B0 [T]",
+            zaxis_title="Tp [K]",
+        ),
+        margin=dict(l=0, r=0, t=40, b=0),
     )
     return fig
 
@@ -626,7 +757,7 @@ def seed_fraction_min_max_surface(
     asymptotic. The minimum comes from Friedberg's *other* design constraint: delivering
     at least an "industrially relevant" load power density S_C (~100 MW/m^3 is the
     paper's own figure, see Sec. 2/7), combined with the same matched-load choice of Z
-    used in critical_temperature_surface_matched_load (Z = sqrt(1+beta^2), eq. 6.10). At
+    used in stability_volume_grid/_matched_load_batch (Z = sqrt(1+beta^2), eq. 6.10). At
     that Z, with s = sqrt(1+beta^2), S_L simplifies to S_L = m_e n_e nu_M(Te) v_p^2 beta^4
     / [s(s+1)^2] -- still linear in n_e, so hitting S_C requires
     n_e >= S_C * s(s+1)^2 / (m_e nu_M v_p^2 beta^4). This is closed-form algebra, not a
@@ -819,18 +950,21 @@ def demo_sweeps(hall_solver: HallSolver, base: dict) -> list[tuple[str, plt.Figu
         window_te_values, window_beta_values, max_ns, min_ne, PAPER_REFERENCE_GAS_NUMBER_DENSITY, 100e6,
     )))
 
-    # 10. critical_load_resistivity_surface's height (7) replaced with the next most
-    # consequential free knob, Tp -- load resistivity is no longer a free axis at all,
-    # fixed everywhere to the Friedberg (6.10) matched-load Z=sqrt(1+beta^2) instead.
-    # Smaller grid than (7): each point here re-solves an inner fixed-point loop (for Z)
-    # inside the Tp scan, substantially more expensive per point.
-    seed_fraction_tp_values = np.logspace(-5, -1, 14)
-    b0_tp_values = np.linspace(0.1, 5.0, 14)
-    lower_tp, upper_tp, lower_tp_power, upper_tp_power = critical_temperature_surface_matched_load(
-        hall_solver, base, seed_fraction_tp_values, b0_tp_values,
+    # 10. The full 3-D stability structure over (seed_fraction, B0, Tp), including the
+    # Tp ~ 2000-5000 K re-entrant unstable pocket a 2-surface version of this plot
+    # couldn't represent -- a precomputed grid (fully vectorized, affordable at much
+    # finer resolution than the old per-cell root-search) plus a marching-cubes
+    # isosurface, rather than an assumed surface shape or a dense (and, it turned out,
+    # visibly terraced) point-cloud scatter.
+    volume = stability_volume_grid(hall_solver, base, VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES)
+    mesh_vertices, mesh_faces, mesh_vertex_power = stability_boundary_mesh(
+        volume, VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES,
     )
-    figures.append(("critical_temperature_surface_matched_load", plot_critical_temperature_surface_matched_load(
-        lower_tp, upper_tp, lower_tp_power, upper_tp_power, seed_fraction_tp_values, b0_tp_values, base,
+    arrow_starts, arrow_ends = stability_boundary_stable_direction_segments(
+        volume, VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES, mesh_vertices, mesh_faces,
+    )
+    figures.append(("stability_boundary_mesh", plot_stability_boundary_mesh(
+        mesh_vertices, mesh_faces, mesh_vertex_power, arrow_starts, arrow_ends, base,
     )))
 
     return figures
@@ -853,6 +987,28 @@ def main() -> None:
             path = OUTPUT_DIR / f"{name}.png"
             fig.savefig(path, dpi=150)
             print(f"Saved {path}")
+
+        # matplotlib's Poly3DCollection has no GPU acceleration either, so also emit a
+        # standalone interactive HTML version via Plotly (WebGL) for actually rotating
+        # it; skipped gracefully if plotly isn't installed, since it's optional here
+        # (see pyproject.toml's "ui" extra).
+        try:
+            volume = stability_volume_grid(hall_solver, base, VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES)
+            mesh_vertices, mesh_faces, mesh_vertex_power = stability_boundary_mesh(
+                volume, VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES,
+            )
+            arrow_starts, arrow_ends = stability_boundary_stable_direction_segments(
+                volume, VOLUME_SEED_FRACTION_VALUES, VOLUME_B0_VALUES, VOLUME_TP_VALUES, mesh_vertices, mesh_faces,
+            )
+            interactive_fig = plot_stability_boundary_mesh_interactive(
+                mesh_vertices, mesh_faces, mesh_vertex_power, arrow_starts, arrow_ends,
+            )
+        except ImportError:
+            print("(plotly not installed -- skipping the interactive HTML surface; `uv sync --extra ui` to enable it)")
+        else:
+            html_path = OUTPUT_DIR / "stability_boundary_mesh.html"
+            interactive_fig.write_html(html_path, include_plotlyjs="cdn")  # don't embed the plotly.js bundle
+            print(f"Saved {html_path} (open in a browser to rotate it smoothly)")
 
     if args.show:
         plt.show()

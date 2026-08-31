@@ -1,5 +1,72 @@
 import numpy as np
 import pytest
+from scipy import constants
+
+
+class TestSolveEquilibriumBatch:
+    """solve_equilibrium_batch runs the identical _iterate_equilibrium fixed-point loop
+    as solve_equilibrium, just vectorized -- it must agree with looping the scalar
+    version point-by-point, for both a simple grid and irregular/broadcast shapes."""
+
+    def test_matches_scalar_loop_on_a_grid(self, hall_solver, channel_params):
+        B0 = np.linspace(0.2, 3.0, 5)
+        Tp = np.linspace(1000.0, 3000.0, 4)
+        B0_grid, Tp_grid = np.meshgrid(B0, Tp)  # shape (4, 5)
+
+        n_p0 = channel_params["p0"] / (
+            constants.k * channel_params["Tp0"]
+        )
+        n_s0 = channel_params["seed_frac0"] * n_p0
+        eta_L = channel_params["R_L"] * channel_params["A"] / channel_params["L"]
+
+        result = hall_solver.solve_equilibrium_batch(
+            flow_speed=channel_params["u0"],
+            gas_temperature=Tp_grid,
+            gas_number_density=n_p0,
+            seed_number_density=n_s0,
+            magnetic_field=B0_grid,
+            load_resistivity=eta_L,
+        )
+
+        for i in range(Tp_grid.shape[0]):
+            for j in range(Tp_grid.shape[1]):
+                plasma = hall_solver.solve_equilibrium(
+                    flow_speed=channel_params["u0"],
+                    gas_temperature=float(Tp_grid[i, j]),
+                    gas_number_density=n_p0,
+                    seed_number_density=n_s0,
+                    magnetic_field=float(B0_grid[i, j]),
+                    load_resistivity=eta_L,
+                )
+                assert result["electron_temperature"][i, j] == pytest.approx(plasma.electron_temperature, rel=1e-9)
+                assert result["electron_number_density"][i, j] == pytest.approx(plasma.electron_number_density, rel=1e-9)
+                assert result["hall_parameter"][i, j] == pytest.approx(plasma.hall_parameter, rel=1e-9)
+                assert result["resistivity"][i, j] == pytest.approx(plasma.resistivity, rel=1e-9)
+                assert result["current_x"][i, j] == pytest.approx(plasma.current_density[0], rel=1e-9)
+                assert result["current_y"][i, j] == pytest.approx(plasma.current_density[1], rel=1e-9)
+                assert result["axial_electric_field"][i, j] == pytest.approx(plasma.axial_electric_field, rel=1e-9)
+                assert result["ohmic_power_density"][i, j] == pytest.approx(plasma.ohmic_power_density, rel=1e-9)
+                assert result["load_power_density"][i, j] == pytest.approx(plasma.load_power_density, rel=1e-9)
+
+    def test_scalar_inputs_match_solve_equilibrium(self, hall_solver, channel_params):
+        n_p0 = channel_params["p0"] / (
+            constants.k * channel_params["Tp0"]
+        )
+        n_s0 = channel_params["seed_frac0"] * n_p0
+        eta_L = channel_params["R_L"] * channel_params["A"] / channel_params["L"]
+
+        result = hall_solver.solve_equilibrium_batch(
+            flow_speed=channel_params["u0"], gas_temperature=channel_params["Tp0"],
+            gas_number_density=n_p0, seed_number_density=n_s0,
+            magnetic_field=channel_params["B0"], load_resistivity=eta_L,
+        )
+        plasma = hall_solver.solve_equilibrium(
+            flow_speed=channel_params["u0"], gas_temperature=channel_params["Tp0"],
+            gas_number_density=n_p0, seed_number_density=n_s0,
+            magnetic_field=channel_params["B0"], load_resistivity=eta_L,
+        )
+        assert float(result["electron_temperature"]) == pytest.approx(plasma.electron_temperature, rel=1e-9)
+        assert float(result["hall_parameter"]) == pytest.approx(plasma.hall_parameter, rel=1e-9)
 
 
 class TestSingleSlice:
