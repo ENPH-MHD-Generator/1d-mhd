@@ -30,17 +30,20 @@ class SeedDensityBounds:
         self._transport_model = MHDTransportModel(seed_type=seed_type, gas_type=gas_type)
         self._criterion = FriedbergAsymptoticCriterion()
 
-    def _ceiling_margin_minus_one(self, seed_number_density: float, electron_temperature: float, beta: float) -> float:
+    def _ceiling_margin_minus_level(self, seed_number_density: float, electron_temperature: float, beta: float, level: float) -> float:
         """Shared by `ceiling` and `min_max_window`: at fixed Te and beta,
-        beta_crit_asymptotic(n_s)/beta - 1. `gas_temperature` is passed as NaN --
+        beta_crit_asymptotic(n_s)/beta - level. `gas_temperature` is passed as NaN --
         FriedbergAsymptoticCriterion ignores it, and NaN makes that explicit rather
-        than passing a real-looking value that isn't actually used."""
+        than passing a real-looking value that isn't actually used. `level`
+        generalizes past marginal stability (1.0, the default) the same way
+        EquilibriumSweep.margin_minus_level does -- see its docstring."""
         f_I = self._ionization_model.get_electron_density(electron_temperature, seed_number_density) / seed_number_density
-        return self._criterion.critical_hall_parameter(electron_temperature, np.nan, self._seed_type.ionization_potential, f_I) / beta - 1.0
+        beta_crit = self._criterion.critical_hall_parameter(electron_temperature, np.nan, self._seed_type.ionization_potential, f_I)
+        return float(beta_crit) / beta - level
 
     def ceiling(
             self, electron_temperature_values: np.ndarray, beta_values: np.ndarray, reference_gas_number_density: float,
-            ns_bracket: tuple[float, float] = (1e14, 1e28),
+            level: float = 1.0, ns_bracket: tuple[float, float] = (1e14, 1e28),
     ) -> np.ndarray:
         """Reproduces Friedberg's (6.27)-style *ceiling* directly: holding Te fixed
         (prescribed here, NOT solved via the energy-balance equilibrium HallSolver
@@ -75,8 +78,8 @@ class SeedDensityBounds:
         for i, Te in enumerate(electron_temperature_values):
             for j, beta in enumerate(beta_values):
                 try:
-                    if np.sign(self._ceiling_margin_minus_one(lo, Te, beta)) != np.sign(self._ceiling_margin_minus_one(hi, Te, beta)):
-                        ceiling_ns[i, j] = brentq(self._ceiling_margin_minus_one, lo, hi, args=(Te, beta), xtol=1.0)
+                    if np.sign(self._ceiling_margin_minus_level(lo, Te, beta, level)) != np.sign(self._ceiling_margin_minus_level(hi, Te, beta, level)):
+                        ceiling_ns[i, j] = brentq(self._ceiling_margin_minus_level, lo, hi, args=(Te, beta, level), xtol=1.0)
                 except (ValueError, RuntimeError):
                     pass
         return ceiling_ns / reference_gas_number_density
@@ -85,7 +88,7 @@ class SeedDensityBounds:
             self,
             electron_temperature_values: np.ndarray, beta_values: np.ndarray,
             reference_gas_number_density: float, reference_flow_speed: float,
-            target_power_density: float = 100e6,
+            target_power_density: float = 100e6, level: float = 1.0,
             ns_bracket: tuple[float, float] = (1e14, 1e28),
     ) -> tuple[np.ndarray, np.ndarray]:
         """The 3-D generalisation of `ceiling`: MAXIMUM seed density (the same eq.
@@ -123,8 +126,8 @@ class SeedDensityBounds:
             nu_M = self._transport_model.get_momentum_transfer_frequency(Te, reference_gas_number_density)
             for j, beta in enumerate(beta_values):
                 try:
-                    if np.sign(self._ceiling_margin_minus_one(lo, Te, beta)) != np.sign(self._ceiling_margin_minus_one(hi, Te, beta)):
-                        max_ns[i, j] = brentq(self._ceiling_margin_minus_one, lo, hi, args=(Te, beta), xtol=1.0)
+                    if np.sign(self._ceiling_margin_minus_level(lo, Te, beta, level)) != np.sign(self._ceiling_margin_minus_level(hi, Te, beta, level)):
+                        max_ns[i, j] = brentq(self._ceiling_margin_minus_level, lo, hi, args=(Te, beta, level), xtol=1.0)
                 except (ValueError, RuntimeError):
                     pass
                 s = np.sqrt(1.0 + beta ** 2)

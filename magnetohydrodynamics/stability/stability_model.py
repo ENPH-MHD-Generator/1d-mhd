@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterable
 
 import numpy as np
 
 from magnetohydrodynamics.plasma.plasma import Plasma
+from magnetohydrodynamics.typing import BoolScalar, Scalar
 
 
 class StabilityModel(ABC):
@@ -31,11 +31,11 @@ class StabilityModel(ABC):
     @abstractmethod
     def critical_hall_parameter(
             self,
-            electron_temperature: float | Iterable,
-            gas_temperature: float | Iterable,
-            ionization_potential: float | Iterable,
-            ionization_fraction: float | Iterable,
-    ) -> float | Iterable:
+            electron_temperature: Scalar,
+            gas_temperature: Scalar,
+            ionization_potential: Scalar,
+            ionization_fraction: Scalar,
+    ) -> Scalar:
         """beta_crit: the Hall parameter above which the plasma is unstable, directly
         comparable with Plasma.hall_parameter. Diverges to +inf wherever a concrete
         criterion judges the plasma unconditionally stable (e.g. Te->Tp or f_I->1) --
@@ -43,41 +43,41 @@ class StabilityModel(ABC):
 
     def stability_margin(
             self,
-            hall_parameter: float | Iterable,
-            electron_temperature: float | Iterable,
-            gas_temperature: float | Iterable,
-            ionization_potential: float | Iterable,
-            ionization_fraction: float | Iterable,
-    ) -> float | Iterable:
+            hall_parameter: Scalar,
+            electron_temperature: Scalar,
+            gas_temperature: Scalar,
+            ionization_potential: Scalar,
+            ionization_fraction: Scalar,
+    ) -> Scalar:
         """beta_crit/beta: > 1 stable, < 1 unstable, == 1 marginal."""
         beta_crit = self.critical_hall_parameter(electron_temperature, gas_temperature, ionization_potential, ionization_fraction)
         return np.asarray(beta_crit, dtype=np.float64) / np.asarray(hall_parameter, dtype=np.float64)
 
     def is_stable(
             self,
-            hall_parameter: float | Iterable,
-            electron_temperature: float | Iterable,
-            gas_temperature: float | Iterable,
-            ionization_potential: float | Iterable,
-            ionization_fraction: float | Iterable,
-    ) -> bool | Iterable:
+            hall_parameter: Scalar,
+            electron_temperature: Scalar,
+            gas_temperature: Scalar,
+            ionization_potential: Scalar,
+            ionization_fraction: Scalar,
+    ) -> BoolScalar:
         """hall_parameter <= critical_hall_parameter."""
         beta_crit = self.critical_hall_parameter(electron_temperature, gas_temperature, ionization_potential, ionization_fraction)
         return np.asarray(hall_parameter) <= np.asarray(beta_crit)
 
-    def plasma_critical_hall_parameter(self, plasma: Plasma) -> float:
+    def plasma_critical_hall_parameter(self, plasma: Plasma) -> Scalar:
         return self.critical_hall_parameter(
             plasma.electron_temperature, plasma.gas_temperature,
             plasma.seed_type.ionization_potential, plasma.ionization_fraction,
         )
 
-    def plasma_stability_margin(self, plasma: Plasma) -> float:
+    def plasma_stability_margin(self, plasma: Plasma) -> Scalar:
         return self.stability_margin(
             plasma.hall_parameter, plasma.electron_temperature, plasma.gas_temperature,
             plasma.seed_type.ionization_potential, plasma.ionization_fraction,
         )
 
-    def is_plasma_stable(self, plasma: Plasma) -> bool:
+    def is_plasma_stable(self, plasma: Plasma) -> BoolScalar:
         return self.is_stable(
             plasma.hall_parameter, plasma.electron_temperature, plasma.gas_temperature,
             plasma.seed_type.ionization_potential, plasma.ionization_fraction,

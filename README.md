@@ -1,5 +1,7 @@
 # 1-D Linear Hall MHD Generator
 
+[![CI](https://github.com/ENPH-MHD-Generator/1d-mhd/actions/workflows/ci.yml/badge.svg)](https://github.com/ENPH-MHD-Generator/1d-mhd/actions/workflows/ci.yml)
+
 A one-dimensional simulation of a linear Hall MHD generator: a constant-area
 channel march that couples Ohm's law, Saha ionization equilibrium, and
 electron/primary-gas energy exchange slice by slice. See `Derivation.md` for
@@ -32,6 +34,19 @@ uv run python main.py
 
 ```bash
 uv run pytest
+```
+
+## Development tooling
+
+CI (`.github/workflows/ci.yml`) runs all three of these on every push/PR --
+`magnetohydrodynamics/`, `tests/`, `examples/`, `main.py`, and `ui/stability_tab.py`
+(not yet `ui/app.py` itself, which is due for a rework and has a handful of
+pre-existing findings not worth fixing right before that).
+
+```bash
+uv run pytest --cov --cov-report=term-missing   # tests + a per-file coverage table
+uv run ruff check .                             # lint
+uv run mypy magnetohydrodynamics tests examples main.py ui/stability_tab.py   # type check
 ```
 
 ## Running the interactive UI

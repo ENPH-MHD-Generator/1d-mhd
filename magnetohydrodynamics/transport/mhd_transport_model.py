@@ -1,9 +1,10 @@
-from magnetohydrodynamics.transport.transport_model import TransportModel
+import numpy as np
+from scipy import constants
+
 from magnetohydrodynamics.ionization.seed_type import SeedType
 from magnetohydrodynamics.thermophysics.gas_type import GasType
-from scipy import constants
-from typing import Iterable
-import numpy as np
+from magnetohydrodynamics.transport.transport_model import TransportModel
+from magnetohydrodynamics.typing import Scalar
 
 
 class MHDTransportModel(TransportModel):
@@ -12,16 +13,16 @@ class MHDTransportModel(TransportModel):
         self._gas_type = gas_type
 
     def get_momentum_transfer_frequency(
-            self, electron_temperature: float | Iterable,
-            gas_number_density: float | Iterable
-    ) -> float | Iterable:
+            self, electron_temperature: Scalar,
+            gas_number_density: Scalar
+    ) -> Scalar:
         sqrt_term = np.sqrt(2.0 * constants.k * electron_temperature / constants.electron_mass)
         return gas_number_density * self._seed_type.electron_neutral_cross_section * sqrt_term
 
     def get_energy_transfer_frequency(
-            self, electron_temperature: float | Iterable,
-            gas_number_density: float | Iterable
-    ) -> float | Iterable:
+            self, electron_temperature: Scalar,
+            gas_number_density: Scalar
+    ) -> Scalar:
         momentum_transfer_frequency = self.get_momentum_transfer_frequency(
             electron_temperature,
             gas_number_density

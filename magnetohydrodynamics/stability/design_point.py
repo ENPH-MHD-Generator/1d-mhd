@@ -59,7 +59,9 @@ class MarginalDesignPointSolver:
         one_minus_f_I = r / (1.0 + r)
         ionization_fraction = 1.0 - one_minus_f_I
 
-        beta_crit = self._criterion.critical_hall_parameter(electron_temperature, self._gas_temperature, self._seed_type.ionization_potential, ionization_fraction)
+        beta_crit = self._criterion.critical_hall_parameter(
+            electron_temperature, self._gas_temperature, self._seed_type.ionization_potential, ionization_fraction,
+        )
 
         # Figures of merit (eq. 6.9 for the ratio; sigma = 1/eta, e^2 n_e/(me nu_M)).
         ohmic_to_load_ratio = (beta ** 2 + (1.0 + Z) ** 2) / (beta ** 2 * Z)

@@ -1,7 +1,7 @@
 import time
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from magnetohydrodynamics.analysis import summarize_performance
 from magnetohydrodynamics.presets import build_default_hall_solver as build_hall_solver
@@ -28,7 +28,6 @@ def main():
 
     Ix_profile = out["Jx"] * A
     Ix_in = Ix_profile[0]
-    Ix_out = Ix_profile[-1]
 
     P = Ix_in * V
 
@@ -40,7 +39,11 @@ def main():
     plt.figure(figsize=(6, 4))
 
     plt.plot(out['x'], out['S_load'], label='Te', linestyle='--')
-    plt.xlabel('x [m]'); plt.ylabel('Temperature [K]'); plt.legend(); plt.tight_layout(); plt.show()
+    plt.xlabel('x [m]')
+    plt.ylabel('Temperature [K]')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
     perf = summarize_performance(
         out, A=channel_area,

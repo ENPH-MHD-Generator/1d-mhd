@@ -72,7 +72,7 @@ def draw_stable_direction_markers(ax, xs, ys, zs, length: float, color: str = "s
 
     xs, ys, zs = np.ravel(xs), np.ravel(ys), np.ravel(zs)
     finite = np.isfinite(zs)
-    for x, y, z in zip(xs[finite], ys[finite], zs[finite]):
+    for x, y, z in zip(xs[finite], ys[finite], zs[finite], strict=True):
         ax.plot([x, x], [y, y], [z, z + length], color=color, linewidth=1.5)
     ax.scatter(xs[finite], ys[finite], zs[finite] + length, marker="^", color=color, s=12, depthshade=False)
 

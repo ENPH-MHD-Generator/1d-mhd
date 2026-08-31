@@ -26,7 +26,7 @@ def mesh(axes) -> StabilityBoundaryMesh:
     midpoint) and increasing with B0 -- i.e. "more field is more stable" -- so the
     boundary is a flat plane at B0=2.5 and the stable direction is always +B0."""
     seed_fraction_values, b0_values, tp_values = axes
-    SF, B0, TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
+    _SF, B0, _TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
     margin = 0.4 * B0  # == 1.0 exactly at B0 = 2.5
     load_power_density = np.full_like(margin, 1e6)
     grid = dict(margin=margin, load_power_density=load_power_density)

@@ -32,6 +32,19 @@ class TestCeiling:
         assert len(finite) > 1
         assert np.all(np.diff(finite) <= 1e-12)
 
+    def test_higher_level_lowers_the_ceiling(self, bounds: SeedDensityBounds):
+        """Demanding a stability margin higher than 1.0 (level=1.5, a safety buffer)
+        is a strictly harder criterion to satisfy than exactly marginal stability
+        (level=1.0) -- ceiling(level=1.5) should never exceed ceiling(level=1.0) at
+        the same (Te, beta)."""
+        Te_values = np.array([15000.0])
+        beta_values = np.logspace(0.0, 2.0, 8)
+        default_ceiling = bounds.ceiling(Te_values, beta_values, reference_gas_number_density=1e24)
+        buffered_ceiling = bounds.ceiling(Te_values, beta_values, reference_gas_number_density=1e24, level=1.5)
+        both_found = np.isfinite(default_ceiling) & np.isfinite(buffered_ceiling)
+        assert both_found.any()
+        assert np.all(buffered_ceiling[both_found] <= default_ceiling[both_found])
+
     def test_nan_when_no_ceiling_found_in_bracket(self, bounds: SeedDensityBounds):
         """An absurdly high beta target with a narrow ns_bracket should fail to find a
         sign change -- NaN, not an exception."""

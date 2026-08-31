@@ -9,12 +9,13 @@ Friedberg's own Sec. 7.3 worked numeric example; (3) a self-consistency check be
 exact (5.13) and asymptotic (6.23) criteria, which were transcribed from different
 equations in the paper and should agree in the appropriate joint limit.
 """
+import itertools
+
 import numpy as np
 import pytest
 from scipy import constants
 
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergAsymptoticCriterion, FriedbergCriterion
-
 
 # --- Hand-derived formula values -------------------------------------------------------
 # Independently computed (not by calling `alpha`/`critical_hall_parameter`) for an
@@ -108,7 +109,7 @@ class TestCriticalHallParameterExact:
         f_I = np.linspace(0.1, 0.9, 5)
         result = exact.critical_hall_parameter(Te, Tp, 3.894, f_I)
         expected = np.array([
-            exact.critical_hall_parameter(float(te), Tp, 3.894, float(fi)) for te, fi in zip(Te, f_I)
+            exact.critical_hall_parameter(float(te), Tp, 3.894, float(fi)) for te, fi in zip(Te, f_I, strict=True)
         ])
         assert result.shape == (5,)
         np.testing.assert_allclose(result, expected, rtol=1e-12)
@@ -163,6 +164,6 @@ class TestExactVsAsymptoticSelfConsistency:
 
         # Each step toward f_I -> 1 (with Delta_T scaled up alongside it) should bring the
         # two formulas closer together.
-        for earlier, later in zip(deviations, deviations[1:]):
+        for earlier, later in itertools.pairwise(deviations):
             assert later < earlier
         assert deviations[-1] < 0.01

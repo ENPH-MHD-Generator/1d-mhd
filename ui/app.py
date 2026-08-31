@@ -35,8 +35,11 @@ import tomli_w
 from scipy.optimize import differential_evolution, minimize_scalar
 
 from magnetohydrodynamics.analysis import summarize_performance
-from magnetohydrodynamics.presets import build_default_hall_solver
+from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
+from magnetohydrodynamics.stability import FriedbergAsymptoticCriterion, FriedbergCriterion
 from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
+
+import stability_tab
 
 st.set_page_config(page_title="Hall MHD Generator", layout="wide")
 
@@ -360,6 +363,25 @@ def profile_hall_parameter(out: dict) -> go.Figure:
     return plot_single_axis(out["x"], [("β", out["beta"], COLOR_PURPLE, "solid")], "Hall Parameter Along the Channel", "β [-]")
 
 
+def profile_stability_margin(out: dict, ionization_potential: float) -> go.Figure:
+    """Velikhov-ionisation stability margin beta_crit/beta at every slice the march
+    visited (magnetohydrodynamics.stability -- see examples/channel_profile.py for
+    the matplotlib counterpart this mirrors). Log-scaled: the margin routinely spans
+    several orders of magnitude along one channel."""
+    exact = FriedbergCriterion()
+    asymptotic = FriedbergAsymptoticCriterion()
+    margin = exact.stability_margin(out["beta"], out["Te"], out["Tp"], ionization_potential, out["f_I"])
+    margin_asymptotic = asymptotic.stability_margin(out["beta"], out["Te"], out["Tp"], ionization_potential, out["f_I"])
+    fig = plot_single_axis(
+        out["x"],
+        [("exact (5.13)", margin, COLOR_BLUE, "solid"), ("asymptotic (6.23)", margin_asymptotic, COLOR_GREEN, "dash")],
+        "Stability Margin Along the Channel", "β_crit/β",
+    )
+    fig.update_yaxes(type="log")
+    fig.add_hline(y=1.0, line=dict(color="black", width=1))
+    return fig
+
+
 def compare_temperature(configs: list[dict]) -> go.Figure:
     series = []
     for i, cfg in enumerate(configs):
@@ -509,8 +531,8 @@ if channel.choked:
         "load resistivity, or seed fraction to push the choke point further down the channel."
     )
 
-tab_profiles, tab_inlet, tab_optimize, tab_multi, tab_compare = st.tabs(
-    ["📈 Profiles", "🔎 Inlet Summary", "🎯 Optimize", "🧬 Multi-Optimize", "🆚 Compare"]
+tab_profiles, tab_inlet, tab_stability, tab_optimize, tab_multi, tab_compare = st.tabs(
+    ["📈 Profiles", "🔎 Inlet Summary", "🛡️ Stability", "🎯 Optimize", "🧬 Multi-Optimize", "🆚 Compare"]
 )
 
 with tab_profiles:
@@ -525,6 +547,10 @@ with tab_profiles:
         st.plotly_chart(profile_power(out), width="stretch", key="plot_power")
         st.plotly_chart(profile_pressure(out), width="stretch", key="plot_pressure")
         st.plotly_chart(profile_hall_parameter(out), width="stretch", key="plot_hall_parameter")
+        st.plotly_chart(profile_stability_margin(out, default_seed_type().ionization_potential), width="stretch", key="plot_stability_margin")
+
+with tab_stability:
+    stability_tab.render(ui_values)
 
 with tab_inlet:
     st.markdown("Everything the solver computes for the very first slice (x = 0), where the axial march starts.")

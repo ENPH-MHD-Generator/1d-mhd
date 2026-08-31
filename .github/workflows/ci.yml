@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --group dev
+
+      - name: pytest (with coverage)
+        run: uv run pytest --cov --cov-report=term-missing
+
+      - name: ruff
+        if: always()
+        # ui/app.py is excluded deliberately -- see pyproject.toml's [tool.mypy] comment;
+        # it's about to be reworked, so its lint/type debt isn't gated here yet.
+        # ui/stability_tab.py is newer code and is clean, so it IS gated.
+        run: uv run ruff check magnetohydrodynamics tests examples main.py ui/stability_tab.py
+
+      - name: mypy
+        if: always()
+        run: uv run mypy magnetohydrodynamics tests examples main.py ui/stability_tab.py

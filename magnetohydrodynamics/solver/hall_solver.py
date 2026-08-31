@@ -13,6 +13,7 @@ from magnetohydrodynamics.state.geometry import Geometry
 from magnetohydrodynamics.state.ionization_state import IonizationState
 from magnetohydrodynamics.thermophysics.gas_type import GasType
 from magnetohydrodynamics.transport.transport_model import TransportModel
+from magnetohydrodynamics.typing import Scalar
 
 
 @dataclass
@@ -111,12 +112,18 @@ class HallSolver:
         m_particle = self._gas_type.particle_mass
 
         # initial guesses
-        electron_temperature = gas_temperature * 8.783
-        electron_number_density = np.clip(1.0 * seed_number_density, 1e12, 1.0 * seed_number_density)
+        electron_temperature: Scalar = gas_temperature * 8.783
+        electron_number_density: Scalar = np.clip(1.0 * seed_number_density, 1e12, 1.0 * seed_number_density)
 
-        nu_M = nu_E = hall_parameter = load_ratio = 0.0
-        current_x = current_y = axial_field = 0.0
-        ohmic_power_density = load_power_density = 0.0
+        nu_M: Scalar = 0.0
+        nu_E: Scalar = 0.0
+        hall_parameter: Scalar = 0.0
+        load_ratio: Scalar = 0.0
+        current_x: Scalar = 0.0
+        current_y: Scalar = 0.0
+        axial_field: Scalar = 0.0
+        ohmic_power_density: Scalar = 0.0
+        load_power_density: Scalar = 0.0
 
         for _ in range(self._max_iter):
             nu_M = self._transport_model.get_momentum_transfer_frequency(electron_temperature, gas_number_density)
@@ -290,7 +297,7 @@ class HallSolver:
             if choked or i == num_slices - 1:
                 break
 
-            current_x, current_y = plasma.current_density
+            _current_x, current_y = plasma.current_density
             lorentz_work = current_y * magnetic_field  # J_y B_z, the momentum equation's body-force term
 
             # Solved simultaneously from mass + momentum + the *stagnation*-enthalpy energy

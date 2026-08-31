@@ -1,16 +1,17 @@
 from abc import ABC, abstractmethod
-from typing import Iterable
+
+from magnetohydrodynamics.typing import Scalar
 
 
 class TransportModel(ABC):
     @abstractmethod
     def get_momentum_transfer_frequency(
-            self, electron_temperature: float | Iterable,
-            gas_number_density: float | Iterable
-    ) -> float | Iterable: ...
+            self, electron_temperature: Scalar,
+            gas_number_density: Scalar
+    ) -> Scalar: ...
 
     @abstractmethod
     def get_energy_transfer_frequency(
-            self, electron_temperature: float | Iterable,
-            gas_number_density: float | Iterable
-    ) -> float | Iterable: ...
+            self, electron_temperature: Scalar,
+            gas_number_density: Scalar
+    ) -> Scalar: ...

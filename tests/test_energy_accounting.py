@@ -13,9 +13,9 @@ when the step size shrinks.
 """
 import numpy as np
 import pytest
+from scipy import constants
 
 from magnetohydrodynamics.analysis import summarize_performance
-from scipy import constants
 
 
 def _march_and_measure(hall_solver, gas_type, channel_params, num_slices, magnetic_field=0.1):

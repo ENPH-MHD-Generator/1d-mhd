@@ -22,13 +22,12 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from plotting_utils import parse_show_save_args, save_and_show
 from scipy import constants
 
 from magnetohydrodynamics.presets import all_seed_types, default_gas_type, default_seed_type
 from magnetohydrodynamics.stability import MarginalDesignPointSolver
 from magnetohydrodynamics.thermophysics.gas_type import GasType
-
-from plotting_utils import parse_show_save_args, save_and_show
 
 # Friedberg Sec. 7.1's own reference furnace conditions (HTGR + Laval nozzle, M=1.8).
 REFERENCE_GAS_TEMPERATURE = 481.0    # Tp [K]

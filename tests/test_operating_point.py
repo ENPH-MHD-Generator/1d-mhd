@@ -5,6 +5,8 @@ presets.default_operating_point(), and OperatingPoint.resolve() is the ideal-gas
 unit conversion every sweep in this package depends on -- both worth pinning down
 directly.
 """
+import dataclasses
+
 import pytest
 from scipy import constants
 
@@ -15,7 +17,7 @@ from magnetohydrodynamics.stability.operating_point import OperatingPoint
 def test_default_matches_default_operating_point():
     params = default_operating_point()
     base = OperatingPoint.default()
-    assert base.B0 == params["magnetic_field"]
+    assert params["magnetic_field"] == base.B0
     assert base.Tp == params["inlet_gas_temperature"]
     assert base.p0 == params["inlet_pressure"]
     assert base.v0 == params["inlet_speed"]
@@ -67,5 +69,5 @@ def test_resolve_rejects_an_unknown_field_name():
 
 def test_is_immutable():
     base = OperatingPoint(B0=0.5, Tp=2000.0, p0=10.0e3, v0=150.0, seed_fraction=6.18e-3, load_resistivity=0.5)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         base.B0 = 1.0

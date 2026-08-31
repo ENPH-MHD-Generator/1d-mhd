@@ -1,6 +1,7 @@
-from magnetohydrodynamics.ionization.seed_type import SeedType
-from magnetohydrodynamics.state import State
 from dataclasses import dataclass
+
+from magnetohydrodynamics.ionization.seed_type import SeedType
+from magnetohydrodynamics.state.state import State
 
 
 @dataclass

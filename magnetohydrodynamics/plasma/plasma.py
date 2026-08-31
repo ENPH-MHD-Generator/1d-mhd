@@ -1,10 +1,12 @@
-from magnetohydrodynamics.state.ionization_state import IonizationState
-from magnetohydrodynamics.thermophysics.gas_model import GasType
+from dataclasses import dataclass
+
+from scipy import constants
+
 from magnetohydrodynamics.ionization.seed_type import SeedType
 from magnetohydrodynamics.state.gas_state import GasState
+from magnetohydrodynamics.state.ionization_state import IonizationState
 from magnetohydrodynamics.state.state import State
-from scipy import constants
-from dataclasses import dataclass
+from magnetohydrodynamics.thermophysics.gas_model import GasType
 
 
 @dataclass

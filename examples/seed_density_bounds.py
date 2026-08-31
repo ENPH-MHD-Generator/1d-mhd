@@ -21,12 +21,11 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the '3d' projection
+from plotting_utils import STABILITY_NOTE, parse_show_save_args, save_and_show
 from scipy import constants
 
 from magnetohydrodynamics.presets import default_gas_type, default_seed_type
 from magnetohydrodynamics.stability import SeedDensityBounds
-
-from plotting_utils import STABILITY_NOTE, parse_show_save_args, save_and_show
 
 # Friedberg's own Sec. 7.1 worked-example inlet conditions (HTGR + Laval nozzle, M=1.8):
 # Tp=481 K, pp=0.801 MPa, vp=735 m/s. Used as the reference n_p/v_p for
@@ -45,7 +44,7 @@ def plot_seed_fraction_ceiling(
         beta_values: np.ndarray, electron_temperature_values: np.ndarray, ceiling_seed_fraction: np.ndarray,
 ) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(7, 5.5))
-    for Te, row in zip(electron_temperature_values, ceiling_seed_fraction):
+    for Te, row in zip(electron_temperature_values, ceiling_seed_fraction, strict=True):
         ax.plot(beta_values, row, linewidth=2, label=f"$T_e$ = {Te:,.0f} K")
     ax.set_xscale("log")
     ax.set_yscale("log")

@@ -53,30 +53,40 @@ class TestGrid:
 
 
 class TestMatchedLoad:
-    def test_converges_to_the_matched_load_condition_at_a_known_convergent_point(self, sweep: EquilibriumSweep):
+    def test_converges_to_the_matched_load_condition(self, sweep: EquilibriumSweep):
         """At convergence, load_resistivity should equal sqrt(1+beta^2)*resistivity
-        (eq. 6.10) self-consistently -- verify by checking one more iteration barely
-        moves beta/resistivity. NOT every point in parameter space converges this way
-        -- see the next test, and matched_load's docstring -- this point was picked
-        because it's known (checked directly) to converge cleanly."""
-        point = dict(seed_fraction=2e-4, magnetic_field=1.7, gas_temperature=18.0)
-        result = sweep.matched_load(iters=15, **point)
-        one_more = sweep.matched_load(iters=16, **point)
+        (eq. 6.10) self-consistently -- verify by checking that the bisection has
+        actually settled (one more iteration barely moves beta/resistivity)."""
+        seed_fraction, magnetic_field, gas_temperature = 2e-4, 1.7, 18.0
+        result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=49)
+        one_more = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=50)
         assert float(result["hall_parameter"]) == pytest.approx(float(one_more["hall_parameter"]), rel=1e-6)
 
-    def test_known_limitation_many_points_settle_into_a_period_2_cycle_instead(self, sweep: EquilibriumSweep):
-        """Documents matched_load's KNOWN LIMITATION rather than hiding it: at many
-        (seed_fraction, B0, Tp) points, this undamped fixed-point iteration never
-        converges -- consecutive iteration counts keep disagreeing by a large relative
-        amount no matter how many iterations are run. This test exists so that, if a
-        future fix changes this behavior, it fails here first (a prompt to update this
-        test and matched_load's docstring together) rather than the regression going
-        unnoticed."""
-        point = dict(seed_fraction=6.18e-3, magnetic_field=0.5, gas_temperature=2000.0)
-        result = sweep.matched_load(iters=15, **point)
-        one_more = sweep.matched_load(iters=16, **point)
-        relative_difference = abs(float(result["hall_parameter"]) - float(one_more["hall_parameter"])) / float(one_more["hall_parameter"])
-        assert relative_difference > 0.5  # nowhere near converged -- a real period-2 cycle, not slow convergence
+    def test_converges_at_a_point_that_used_to_settle_into_a_period_2_cycle(self, sweep: EquilibriumSweep):
+        """This exact point used to be a counterexample: the old Picard-iteration
+        version of matched_load never converged here (49 vs. 50 iterations disagreed
+        by >50%, indefinitely) -- see matched_load's docstring for the diagnosis
+        (a single root sitting on an ionisation-avalanche cliff, not bistability) and
+        the bisection fix. Kept as a regression test for that specific point."""
+        seed_fraction, magnetic_field, gas_temperature = 6.18e-3, 0.5, 2000.0
+        result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=49)
+        one_more = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, iters=50)
+        assert float(result["hall_parameter"]) == pytest.approx(float(one_more["hall_parameter"]), rel=1e-4)
+
+    def test_converges_broadly_across_a_grid_that_used_to_be_half_non_convergent(self, sweep: EquilibriumSweep):
+        """The old Picard-iteration version failed to converge at ~50% of points on a
+        grid spanning volume_grid's typical ranges (checked during the investigation
+        that led to the bisection fix). Verify none do now: 49 vs. 50 iterations
+        should agree everywhere, not just at hand-picked points."""
+        seed_fraction_values = np.logspace(-5, -1, 6)
+        b0_values = np.linspace(0.1, 5.0, 6)
+        tp_values = np.logspace(0.0, np.log10(6000.0), 6)
+        SF, B0, TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
+
+        result = sweep.matched_load(SF, B0, TP, iters=49)
+        one_more = sweep.matched_load(SF, B0, TP, iters=50)
+        relative_difference = np.abs(result["hall_parameter"] - one_more["hall_parameter"]) / np.abs(one_more["hall_parameter"])
+        assert np.max(relative_difference) < 1e-3
 
     def test_broadcasts_over_array_inputs(self, sweep: EquilibriumSweep):
         seed_fraction = np.array([1e-4, 1e-3, 1e-2])
@@ -98,9 +108,9 @@ class TestVolumeGrid:
         np.testing.assert_array_equal(grid["stable"], grid["margin"] >= 1.0)
 
 
-class TestMarginMinusOne:
+class TestMarginMinusLevel:
     def test_matches_direct_criterion_evaluation(self, hall_solver, base, seed_type, sweep: EquilibriumSweep):
-        value = sweep.margin_minus_one(B0=0.5)
+        value = sweep.margin_minus_level(1.0, B0=0.5)
 
         point = base.resolve(B0=0.5)
         result = hall_solver.solve_equilibrium_batch(**point)
@@ -110,9 +120,17 @@ class TestMarginMinusOne:
         )
         assert float(value) == pytest.approx(float(expected_margin) - 1.0)
 
+    def test_level_shifts_the_zero_crossing(self, sweep: EquilibriumSweep):
+        """margin_minus_level(level, ...) == margin_minus_level(1.0, ...) - (level - 1.0),
+        so a higher level should read lower (further from a stable crossing) at a
+        fixed point, by exactly the difference in levels."""
+        default_level = sweep.margin_minus_level(1.0, B0=0.5)
+        higher_level = sweep.margin_minus_level(1.5, B0=0.5)
+        assert float(higher_level) == pytest.approx(float(default_level) - 0.5)
+
     def test_broadcasts_over_arrays(self, sweep: EquilibriumSweep):
         b0 = np.array([0.2, 0.5, 1.0])
-        values = sweep.margin_minus_one(B0=b0)
+        values = np.asarray(sweep.margin_minus_level(1.0, B0=b0))
         assert values.shape == (3,)
 
 
@@ -167,3 +185,17 @@ class TestCriticalLoadResistivitySurface:
         found = np.isfinite(lower)
         assert found.any()  # this operating range should find at least some boundary points
         assert np.all(lower_power[found] > 0.0)
+
+    def test_higher_level_raises_the_lower_boundary(self, sweep: EquilibriumSweep):
+        """Raising eta_L only ever pushes the system toward stability (see the
+        docstring's note on no re-destabilisation being observed) -- so demanding a
+        stability margin higher than 1.0 (level=1.5, a safety buffer) should require
+        at least as much load resistivity as demanding exactly marginal stability
+        (level=1.0), at every point where both are found."""
+        seed_fraction_values = np.logspace(-4, -2, 4)
+        b0_values = np.linspace(0.5, 3.0, 4)
+        lower_default, _u, _lp, _up = sweep.critical_load_resistivity_surface(seed_fraction_values, b0_values, scan_points=30)
+        lower_buffered, _u, _lp, _up = sweep.critical_load_resistivity_surface(seed_fraction_values, b0_values, level=1.5, scan_points=30)
+        both_found = np.isfinite(lower_default) & np.isfinite(lower_buffered)
+        assert both_found.any()
+        assert np.all(lower_buffered[both_found] >= lower_default[both_found])

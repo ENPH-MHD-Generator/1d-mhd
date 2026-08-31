@@ -1,6 +1,7 @@
-from magnetohydrodynamics.thermophysics.gas_type import GasType
-from magnetohydrodynamics.state import State
 from dataclasses import dataclass
+
+from magnetohydrodynamics.state.state import State
+from magnetohydrodynamics.thermophysics.gas_type import GasType
 
 
 @dataclass

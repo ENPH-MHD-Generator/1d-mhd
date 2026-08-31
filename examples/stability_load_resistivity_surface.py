@@ -15,11 +15,10 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the '3d' projection
+from plotting_utils import STABILITY_NOTE, draw_stable_direction_markers, fixed_params_text, parse_show_save_args, save_and_show
 
 from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
 from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint
-
-from plotting_utils import STABILITY_NOTE, draw_stable_direction_markers, fixed_params_text, parse_show_save_args, save_and_show
 
 
 def plot_critical_load_resistivity_surface(
@@ -50,6 +49,9 @@ def plot_critical_load_resistivity_surface(
     ax = fig.add_subplot(projection="3d")
 
     def add_surface(height: np.ndarray, power: np.ndarray, **kwargs):
+        # norm is always constructed above with explicit vmin/vmax (either branch), so vmin
+        # is never actually None here -- LogNorm.vmin is just typed float | None in general.
+        assert norm.vmin is not None
         safe_power = np.where(np.isfinite(power) & (power > 0), power, norm.vmin)
         facecolors = cmap(norm(safe_power))
         return ax.plot_surface(X, Y, np.ma.masked_invalid(np.log10(height)), facecolors=facecolors, **kwargs)

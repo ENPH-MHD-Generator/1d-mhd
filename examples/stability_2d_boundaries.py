@@ -27,11 +27,10 @@ from __future__ import annotations
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+from plotting_utils import STABILITY_NOTE, draw_boundary_contour, fixed_params_text, parse_show_save_args, save_and_show
 
 from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
 from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint
-
-from plotting_utils import STABILITY_NOTE, draw_boundary_contour, fixed_params_text, parse_show_save_args, save_and_show
 
 
 def plot_stability_boundary(

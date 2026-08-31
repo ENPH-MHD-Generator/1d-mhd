@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None, f"could not load a module spec from {path}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

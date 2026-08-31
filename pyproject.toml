@@ -30,8 +30,10 @@ python-downloads = "auto"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "ruff>=0.16.5",
 ]
 
 # `uv run pytest --cov --cov-report=term-missing` for a per-file coverage table (this
@@ -40,4 +42,43 @@ dev = [
 [tool.coverage.run]
 source = ["magnetohydrodynamics"]
 omit = ["tests/*"]
+
+# `uv run mypy magnetohydrodynamics tests examples main.py ui/stability_tab.py` --
+# deliberately NOT ui/app.py itself yet: it has a handful of real (if minor)
+# scipy/numpy typing mismatches, but that file is due for a rework, so fixing its
+# types now would likely be thrown away; revisit typing it once that rework lands.
+# ui/stability_tab.py is newer code living in the same directory and is clean, so it
+# IS included above -- don't assume everything under ui/ is excluded.
+[tool.mypy]
+python_version = "3.13"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Neither ships type stubs/a py.typed marker; nothing to check against beyond "did this
+# import resolve at all."
+[[tool.mypy.overrides]]
+module = ["mpl_toolkits.*", "plotly.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 160  # matches this codebase's existing long-line style (see e.g. hall_solver.py)
+target-version = "py313"
+extend-exclude = ["tests/reference_main.py"]  # frozen, hand-validated oracle -- not this repo's own style
+
+[tool.ruff.lint]
+# Deliberately NOT the flake8-comprehensions family (C4) -- it flags dict(key=value),
+# which this codebase uses as a deliberate house style throughout (e.g. every
+# HallSolver result dict), not a mistake to "fix".
+select = [
+    "E", "F",   # pycodestyle errors + pyflakes: real bugs (unused imports/vars, undefined names, ...)
+    "I",        # isort: import ordering
+    "UP",       # pyupgrade: modern-Python idioms (this repo targets 3.13 only)
+    "B",        # flake8-bugbear: common correctness pitfalls
+    "SIM",      # flake8-simplify
+    "RUF",      # ruff's own additional checks
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["magnetohydrodynamics"]
 

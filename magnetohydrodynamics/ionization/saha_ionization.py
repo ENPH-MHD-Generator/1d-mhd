@@ -1,15 +1,16 @@
+import numpy as np
+from scipy import constants
+
 from magnetohydrodynamics.ionization.ionization_model import IonizationModel
 from magnetohydrodynamics.ionization.seed_type import SeedType
-from scipy import constants
-from typing import Iterable
-import numpy as np
+from magnetohydrodynamics.typing import Scalar
 
 
 class LocalThermodynamicEquilibrium(IonizationModel):
     def __init__(self, seed_type: SeedType):
         self._seed_type = seed_type
 
-    def saha_coefficient(self, electron_temperature: float | Iterable) -> float | Iterable:
+    def saha_coefficient(self, electron_temperature: Scalar) -> Scalar:
         """
         N(Te), the Saha prefactor: n_e^2/(n_s-n_e) = N(Te) at equilibrium.
         N(Te) = degeneracy_ratio * (2*pi*me*k*Te/h^2)^(3/2) * exp(-E_I/kTe).
@@ -28,9 +29,9 @@ class LocalThermodynamicEquilibrium(IonizationModel):
 
     def get_electron_density(
             self,
-            electron_temperature: float | Iterable,
-            seed_number_density: float | Iterable
-    ) -> float | Iterable:
+            electron_temperature: Scalar,
+            seed_number_density: Scalar
+    ) -> Scalar:
         """
         Saha-like model used in your original get_electron_density().
         Inputs:

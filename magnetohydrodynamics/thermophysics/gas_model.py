@@ -1,6 +1,7 @@
-from magnetohydrodynamics.thermophysics.gas_type import GasType
 from abc import ABC, abstractmethod
-from typing import Iterable
+
+from magnetohydrodynamics.thermophysics.gas_type import GasType
+from magnetohydrodynamics.typing import Scalar
 
 
 class GasModel(ABC):
@@ -9,20 +10,20 @@ class GasModel(ABC):
     @abstractmethod
     def compute_number_density(
             self,
-            gas_pressure: float | Iterable,
-            gas_temperature: float | Iterable
-    ) -> float | Iterable: ...
+            gas_pressure: Scalar,
+            gas_temperature: Scalar
+    ) -> Scalar: ...
 
     @abstractmethod
     def get_mass_density(
             self,
-            gas_pressure: float | Iterable,
-            gas_temperature: float | Iterable
-    ) -> float | Iterable: ...
+            gas_pressure: Scalar,
+            gas_temperature: Scalar
+    ) -> Scalar: ...
 
     @abstractmethod
     def get_mach_number(
             self,
-            flow_speed: float | Iterable,
-            gas_temperature: float | Iterable
-    ) -> float | Iterable: ...
+            flow_speed: Scalar,
+            gas_temperature: Scalar
+    ) -> Scalar: ...

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Iterable
-
 import numpy as np
 from scipy import constants
 
 from magnetohydrodynamics.stability.stability_model import StabilityModel
+from magnetohydrodynamics.typing import Scalar
 
 
 class FriedbergCriterion(StabilityModel):
@@ -26,10 +25,10 @@ class FriedbergCriterion(StabilityModel):
 
     def alpha(
             self,
-            electron_temperature: float | Iterable,
-            ionization_potential: float | Iterable,
-            ionization_fraction: float | Iterable,
-    ) -> float | Iterable:
+            electron_temperature: Scalar,
+            ionization_potential: Scalar,
+            ionization_fraction: Scalar,
+    ) -> Scalar:
         """Friedberg (4.3)/(7.1)'s alpha = (kTe / (3kTe + 2E_I)) * (2 - f_I)/(1 - f_I).
 
         Te : electron temperature [K]. E_I : seed ionisation potential [eV]. f_I : seed
@@ -54,11 +53,11 @@ class FriedbergCriterion(StabilityModel):
 
     def critical_hall_parameter(
             self,
-            electron_temperature: float | Iterable,
-            gas_temperature: float | Iterable,
-            ionization_potential: float | Iterable,
-            ionization_fraction: float | Iterable,
-    ) -> float | Iterable:
+            electron_temperature: Scalar,
+            gas_temperature: Scalar,
+            ionization_potential: Scalar,
+            ionization_fraction: Scalar,
+    ) -> Scalar:
         """beta_crit from the exact marginal stability criterion, Friedberg (5.13):
 
             beta_crit^2 = 4*alpha*(2 + 1/Delta_T) * [1 + alpha*(1 + 1/Delta_T)]
@@ -92,11 +91,11 @@ class FriedbergAsymptoticCriterion(StabilityModel):
 
     def critical_hall_parameter(
             self,
-            electron_temperature: float | Iterable,
-            gas_temperature: float | Iterable,
-            ionization_potential: float | Iterable,
-            ionization_fraction: float | Iterable,
-    ) -> float | Iterable:
+            electron_temperature: Scalar,
+            gas_temperature: Scalar,
+            ionization_potential: Scalar,
+            ionization_fraction: Scalar,
+    ) -> Scalar:
         electron_temperature = np.asarray(electron_temperature, dtype=np.float64)
         ionization_fraction = np.asarray(ionization_fraction, dtype=np.float64)
         ionization_potential_j = np.asarray(ionization_potential, dtype=np.float64) * constants.e

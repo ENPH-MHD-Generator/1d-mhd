@@ -16,11 +16,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the '3d' projection
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from plotting_utils import STABILITY_NOTE, fixed_params_text, parse_show_save_args, save_and_show
 
 from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
 from magnetohydrodynamics.stability import EquilibriumSweep, OperatingPoint, StabilityBoundaryMesh
-
-from plotting_utils import STABILITY_NOTE, fixed_params_text, parse_show_save_args, save_and_show
 
 # Shared between the static matplotlib figure and the optional interactive Plotly
 # export, so both describe the same grid without repeating the resolution/range
@@ -35,31 +34,32 @@ def plot_stability_boundary_mesh(
         starts: np.ndarray, ends: np.ndarray, base: OperatingPoint,
 ) -> plt.Figure:
     """Solid triangulated surface (mpl_toolkits.mplot3d.art3d.Poly3DCollection) of the
-    stability boundary -- the full shape, including the Tp ~ 2000-5000 K re-entrant
-    unstable pocket that made an assumed 2-surface version of this plot unreadable,
-    comes through directly as an actual continuous surface rather than a dense scatter.
-    Color is load power density per face (log scale, averaged from its vertices) --
-    independent information, not a repaint of position. Blue segments mark the stable
-    direction at a sample of faces.
+    stability boundary, colored by load power density per face (log scale, averaged
+    from its vertices) -- independent information, not a repaint of position. Blue
+    segments mark the stable direction at a sample of faces.
 
-    The upper sheet shows a visible cusp -- a fan of ridges converging to a point, near
-    log10(seed_fraction) ~ -3 to -2 -- that is NOT a plotting artifact: checked directly
-    by (1) rebuilding the grid at 45/90/150 points per axis and confirming the cusp's
-    location and sharpness are unchanged (a coarse-grid/interpolation artifact would
-    have softened or shifted), and (2) re-rendering the identical mesh with Tp displayed
-    in log10(Tp) instead of linear Tp (in case the grid's own log10(Tp) spacing was
-    warping into an apparent crease under the linear display) -- the same ridge fan
-    appears in both. This is most likely a genuine fold in the solution surface, of a
-    piece with this system's other confirmed bistable/multi-branch behavior (the
-    re-entrant pocket itself), rather than something to fix.
-
-    NOTE: as of EquilibriumSweep.matched_load's docstring's KNOWN LIMITATION, roughly
-    half the underlying grid's points don't actually converge to a self-consistent
-    matched-load solution -- this plot may currently misrepresent parts of the
-    surface as a result. Flagged, not fixed here."""
+    EARLIER FINDINGS NO LONGER VERIFIED, READ BEFORE TRUSTING THEM: prior versions of
+    this docstring described a visible cusp (a fan of ridges near
+    log10(seed_fraction) ~ -3 to -2) and a distinct re-entrant unstable pocket around
+    Tp ~ 2000-5000 K, both checked carefully at the time and believed genuine. Those
+    checks were all run against EquilibriumSweep.matched_load's old Picard-iteration
+    solve, which (see that method's docstring) failed to converge to a self-consistent
+    matched-load solution at roughly half of a typical grid's points -- so some
+    fraction of the surface those checks examined was built from arbitrary,
+    non-physical Picard-cycle artifacts, not real equilibria. After switching
+    matched_load to the bisection fix, the rendered surface visibly changed shape (a
+    single connected sheet where there used to be a visually separate lower sheet) --
+    checked only by eye, once, not with the same rigor (resolution-invariance,
+    log-vs-linear-Tp re-render) the original cusp/pocket claims got. Until that
+    re-investigation is redone against the corrected solver, treat any fold/pocket
+    structure in this plot as unconfirmed rather than assuming it's the same genuine
+    physics found before."""
     face_power = vertex_power[faces].mean(axis=1)
     finite_power = face_power[np.isfinite(face_power) & (face_power > 0)]
     norm = mcolors.LogNorm(vmin=np.min(finite_power), vmax=np.max(finite_power)) if finite_power.size else mcolors.LogNorm(1.0, 10.0)
+    # norm is always constructed above with explicit vmin/vmax (either branch), so vmin is
+    # never actually None here -- LogNorm.vmin is just typed float | None in general.
+    assert norm.vmin is not None
     safe_power = np.where(np.isfinite(face_power) & (face_power > 0), face_power, norm.vmin)
     cmap = plt.get_cmap("plasma")
 
@@ -72,7 +72,7 @@ def plot_stability_boundary_mesh(
     ax.set_ylim(vertices[:, 1].min(), vertices[:, 1].max())
     ax.set_zlim(vertices[:, 2].min(), vertices[:, 2].max())
 
-    for s, e in zip(starts, ends):
+    for s, e in zip(starts, ends, strict=True):
         ax.plot([s[0], e[0]], [s[1], e[1]], [s[2], e[2]], color="steelblue", linewidth=1.5)
     if len(ends):
         ax.scatter(ends[:, 0], ends[:, 1], ends[:, 2], marker="^", color="steelblue", s=12, depthshade=False)
@@ -121,7 +121,7 @@ def plot_stability_boundary_mesh_interactive(
     log_power = np.log10(safe_power)
 
     segment_x, segment_y, segment_z = [], [], []
-    for s, e in zip(starts, ends):
+    for s, e in zip(starts, ends, strict=True):
         segment_x += [s[0], e[0], None]
         segment_y += [s[1], e[1], None]
         segment_z += [s[2], e[2], None]

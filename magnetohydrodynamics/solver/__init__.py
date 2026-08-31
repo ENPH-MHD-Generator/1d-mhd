@@ -1,7 +1,6 @@
-from .hall_solver import HallSolver, Channel
-
+from .hall_solver import Channel, HallSolver
 
 __all__ = [
-    "HallSolver",
     "Channel",
+    "HallSolver",
 ]

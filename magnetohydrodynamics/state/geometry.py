@@ -1,7 +1,10 @@
 from abc import ABC
-from typing import Iterable
-from magnetohydrodynamics.state.state import State
+from collections.abc import Iterable
+
 import numpy as np
+
+from magnetohydrodynamics.state.state import State
+
 
 class Geometry(ABC):
     states: Iterable[State]
