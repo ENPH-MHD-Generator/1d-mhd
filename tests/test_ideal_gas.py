@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
@@ -31,3 +32,20 @@ def test_mach_number_matches_reference(main_ref, ideal_gas):
     for u, Tp in [(150.115, 2000.0), (50.0, 500.0), (300.0, 3000.0)]:
         expected = main_ref.get_mach_number(u, Tp)
         assert ideal_gas.get_mach_number(u, Tp) == pytest.approx(expected, rel=1e-9)
+
+
+def test_get_flow_speed_is_the_inverse_of_get_mach_number(ideal_gas):
+    for u, Tp in [(150.115, 2000.0), (50.0, 500.0), (300.0, 3000.0)]:
+        mach_number = ideal_gas.get_mach_number(u, Tp)
+        assert ideal_gas.get_flow_speed(mach_number, Tp) == pytest.approx(u, rel=1e-12)
+
+
+def test_get_flow_speed_holds_mach_number_fixed_across_temperature(ideal_gas):
+    """The actual use case (EquilibriumSweep's fixed_mach_number sweeps): pick a Mach
+    number once, then confirm the flow speed this returns really does read back the
+    same Mach number at every temperature, not just the one it was derived from."""
+    mach_number = 0.18
+    temperatures = np.array([1.0, 100.0, 500.0, 1900.0, 6000.0])
+    flow_speeds = ideal_gas.get_flow_speed(mach_number, temperatures)
+    recovered = ideal_gas.get_mach_number(flow_speeds, temperatures)
+    np.testing.assert_allclose(recovered, mach_number, rtol=1e-12)

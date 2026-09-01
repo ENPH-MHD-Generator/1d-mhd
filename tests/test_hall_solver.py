@@ -3,6 +3,10 @@ import pytest
 from scipy import constants
 
 
+def test_gas_type_property_returns_the_constructor_gas_type(hall_solver, gas_type):
+    assert hall_solver.gas_type is gas_type
+
+
 class TestSolveEquilibriumBatch:
     """solve_equilibrium_batch runs the identical _iterate_equilibrium fixed-point loop
     as solve_equilibrium, just vectorized -- it must agree with looping the scalar
@@ -192,11 +196,80 @@ class TestFullMarch:
         assert len(channel.x) == len(channel)
         assert channel.x[-1] < channel_params["L"]
 
-        gas_type = hall_solver._gas_type
+        gas_type = hall_solver.gas_type
         last = channel.states[-1]
-        from scipy import constants
         mach_last = np.sqrt(
             gas_type.particle_mass * last.flow_speed ** 2
             / (gas_type.heat_capacity_ratio * constants.k * last.gas_temperature)
         )
         assert mach_last == pytest.approx(hall_solver.max_mach_number, abs=1e-6)
+
+
+class TestSupersonicMarch:
+    """Rayleigh-flow choking is symmetric about M=1: heat addition accelerates a
+    subsonic flow up to M=1 (see TestFullMarch above) but decelerates a supersonic one
+    down to M=1 -- march()'s axial-ODE denominator (see its own comment) flips sign
+    exactly there. Before the mirrored bisection was added, ANY supersonic inlet
+    immediately registered as choked at x=0: the bisection's invariant ("step_size=0
+    has Mach below max_mach_number") was already false when the flow started above
+    it, so it silently converged to step_size=0 on the very first slice -- i.e. a
+    supersonic run always collapsed immediately, regardless of how weak the coupling
+    (B0, load) actually was."""
+
+    def test_supersonic_inlet_decelerates_without_premature_choking(self, hall_solver, channel_params):
+        # B0=0.01 (weak field, the same idea as TestFullMarch's B0=0.1 override) --
+        # channel_params' normal ~0.5 T is strong enough to choke a supersonic inlet
+        # within a fraction of a millimeter (checked separately), which isn't useful
+        # for actually observing the deceleration-without-choking behavior.
+        inlet_speed = 1200.0  # well supersonic at Tp0=2000 K (Argon's sound speed there is ~590 m/s)
+        num_slices = 50
+        channel = hall_solver.march(
+            num_slices=num_slices,
+            length=channel_params["L"],
+            area=channel_params["A"],
+            inlet_speed=inlet_speed,
+            inlet_pressure=channel_params["p0"],
+            inlet_gas_temperature=channel_params["Tp0"],
+            magnetic_field=0.01,
+            load_resistance=channel_params["R_L"],
+            inlet_seed_fraction=channel_params["seed_frac0"],
+        )
+        assert not channel.choked
+        assert len(channel) == num_slices
+        assert channel.x[-1] == pytest.approx(channel_params["L"])
+
+        gas_type = hall_solver.gas_type
+        mach = np.array([
+            np.sqrt(gas_type.particle_mass * s.flow_speed ** 2 / (gas_type.heat_capacity_ratio * constants.k * s.gas_temperature))
+            for s in channel.states
+        ])
+        assert np.all(mach > 1.0)  # stayed supersonic throughout -- never crossed into invalid territory
+        assert np.all(np.diff(mach) < 0.0)  # decelerating monotonically toward M=1, not away from it
+
+    def test_supersonic_inlet_chokes_at_the_mirrored_mach_threshold(self, hall_solver, channel_params):
+        """At channel_params' own B0=0.5, a supersonic inlet chokes just as fast as the
+        subsonic case does (TestFullMarch.test_choked_flag_and_truncated_channel) -- the
+        interesting thing to check is that it lands on the correct MIRRORED threshold
+        (2 - max_mach_number, e.g. 1.01), not the subsonic one (max_mach_number itself,
+        e.g. 0.99)."""
+        channel = hall_solver.march(
+            num_slices=channel_params["num_slices"],
+            length=channel_params["L"],
+            area=channel_params["A"],
+            inlet_speed=1200.0,
+            inlet_pressure=channel_params["p0"],
+            inlet_gas_temperature=channel_params["Tp0"],
+            magnetic_field=channel_params["B0"],
+            load_resistance=channel_params["R_L"],
+            inlet_seed_fraction=channel_params["seed_frac0"],
+        )
+        assert channel.choked
+        assert 0 < len(channel) < channel_params["num_slices"]
+
+        gas_type = hall_solver.gas_type
+        last = channel.states[-1]
+        mach_last = np.sqrt(
+            gas_type.particle_mass * last.flow_speed ** 2 / (gas_type.heat_capacity_ratio * constants.k * last.gas_temperature)
+        )
+        expected_threshold = 2.0 - hall_solver.max_mach_number
+        assert mach_last == pytest.approx(expected_threshold, abs=1e-6)

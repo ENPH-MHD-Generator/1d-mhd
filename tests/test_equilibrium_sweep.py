@@ -13,6 +13,7 @@ import pytest
 from magnetohydrodynamics.operating_point import OperatingPoint
 from magnetohydrodynamics.stability.equilibrium_sweep import EquilibriumSweep
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergCriterion
+from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
 
 
 @pytest.fixture
@@ -50,6 +51,30 @@ class TestGrid:
     def test_margin_ge_one_matches_stable_flag(self, sweep: EquilibriumSweep):
         grid = sweep.grid("B0", np.linspace(0.1, 5.0, 6), "seed_fraction", np.logspace(-5, -1, 6))
         np.testing.assert_array_equal(grid.stable, grid.margin >= 1.0)
+
+    def test_fixed_mach_number_has_no_effect_when_tp_is_not_an_axis(self, sweep: EquilibriumSweep):
+        b0_values = np.linspace(0.1, 2.0, 4)
+        sf_values = np.logspace(-5, -1, 4)
+        without_mach = sweep.grid("B0", b0_values, "seed_fraction", sf_values)
+        with_mach = sweep.grid("B0", b0_values, "seed_fraction", sf_values, fixed_mach_number=0.5)
+        np.testing.assert_array_equal(without_mach.Te, with_mach.Te)
+
+    def test_fixed_mach_number_overrides_v0_to_hold_mach_number_fixed_across_tp(
+            self, hall_solver, base, gas_type, sweep: EquilibriumSweep,
+    ):
+        ideal_gas = IdealGas(gas_type)
+        b0_values = np.array([0.5])
+        tp_values = np.array([200.0, 2000.0, 5000.0])
+        mach_number = 0.3
+
+        grid = sweep.grid("B0", b0_values, "Tp", tp_values, fixed_mach_number=mach_number)
+
+        B0, TP = np.meshgrid(b0_values, tp_values)  # same convention grid() itself uses
+        expected_v0 = ideal_gas.get_flow_speed(mach_number, TP)
+        point = base.resolve(B0=B0, Tp=TP, v0=expected_v0)
+        expected_result = hall_solver.solve_equilibrium_batch(**point.as_kwargs())
+
+        np.testing.assert_allclose(grid.Te, expected_result.electron_temperature, rtol=1e-12)
 
 
 class TestMatchedLoad:
@@ -93,6 +118,21 @@ class TestMatchedLoad:
         result = sweep.matched_load(seed_fraction=seed_fraction, magnetic_field=0.5, gas_temperature=2000.0)
         assert np.asarray(result.hall_parameter).shape == (3,)
 
+    def test_flow_speed_defaults_to_base_v0(self, base, sweep: EquilibriumSweep):
+        seed_fraction, magnetic_field, gas_temperature = 6.18e-3, 0.5, 2000.0
+        result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature)
+        assert float(result.flow_speed) == pytest.approx(base.v0)
+
+    def test_flow_speed_override_replaces_base_v0(self, base, sweep: EquilibriumSweep):
+        seed_fraction, magnetic_field, gas_temperature = 6.18e-3, 0.5, 2000.0
+        overridden_flow_speed = 2.0 * base.v0
+        result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature, flow_speed=overridden_flow_speed)
+        assert float(result.flow_speed) == pytest.approx(overridden_flow_speed)
+        # A different flow speed changes the Mach number and hence the whole
+        # self-consistent solve -- confirm it actually took effect, not just accepted.
+        default_result = sweep.matched_load(seed_fraction, magnetic_field, gas_temperature)
+        assert float(result.hall_parameter) != pytest.approx(float(default_result.hall_parameter), rel=1e-6)
+
 
 class TestVolumeGrid:
     def test_shape_matches_all_three_axes(self, sweep: EquilibriumSweep):
@@ -106,6 +146,26 @@ class TestVolumeGrid:
     def test_stable_flag_matches_margin(self, sweep: EquilibriumSweep):
         grid = sweep.volume_grid(np.logspace(-5, -1, 3), np.linspace(0.1, 5.0, 3), np.logspace(2.0, 3.5, 3))
         np.testing.assert_array_equal(grid.stable, grid.margin >= 1.0)
+
+    def test_fixed_mach_number_none_matches_default_v0_behavior(self, sweep: EquilibriumSweep):
+        seed_fraction_values, b0_values, tp_values = np.logspace(-5, -1, 3), np.linspace(0.1, 5.0, 3), np.logspace(2.0, 3.5, 3)
+        default = sweep.volume_grid(seed_fraction_values, b0_values, tp_values)
+        explicit_none = sweep.volume_grid(seed_fraction_values, b0_values, tp_values, fixed_mach_number=None)
+        np.testing.assert_array_equal(default.Te, explicit_none.Te)
+
+    def test_fixed_mach_number_overrides_v0_to_hold_mach_number_fixed_across_tp(self, gas_type, sweep: EquilibriumSweep):
+        ideal_gas = IdealGas(gas_type)
+        seed_fraction_values = np.array([6.18e-3])
+        b0_values = np.array([0.5])
+        tp_values = np.array([200.0, 2000.0, 5000.0])
+        mach_number = 0.3
+
+        grid = sweep.volume_grid(seed_fraction_values, b0_values, tp_values, fixed_mach_number=mach_number)
+
+        SF, B0, TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
+        expected_flow_speed = ideal_gas.get_flow_speed(mach_number, TP)
+        expected_result = sweep.matched_load(SF, B0, TP, flow_speed=expected_flow_speed)
+        np.testing.assert_allclose(grid.Te, expected_result.electron_temperature, rtol=1e-12)
 
 
 class TestMarginMinusLevel:

@@ -335,6 +335,16 @@ def profile_primary_gas(out: dict) -> go.Figure:
     )
 
 
+def profile_mach_number(out: dict, ideal_gas: IdealGas) -> go.Figure:
+    """Gas-dynamic Mach number M = u/c_s along the channel -- the same quantity the
+    Inlet Summary tab's "Mach number M" row and the choked-flow warning (M=1, the
+    Rayleigh-flow limit HallSolver.march stops at) already use."""
+    mach = ideal_gas.get_mach_number(out["u"], out["Tp"])
+    fig = plot_single_axis(out["x"], [("M", mach, COLOR_RED, "solid")], "Mach Number Along the Channel", "M [-]")
+    fig.add_hline(y=1.0, line=dict(color="black", width=1))
+    return fig
+
+
 def profile_density(out: dict, seed_number_density) -> go.Figure:
     ionization_fraction = out["ne"] / seed_number_density
     fig = plot_twin_axis(
@@ -528,11 +538,11 @@ seed_number_density = seed_fraction * out["np"]  # n_s(x) = seed_fraction * n_p(
 stability_margin, _stability_margin_asymptotic = compute_stability_margin(out, default_seed_type().ionization_potential)
 min_stability_margin = float(np.min(stability_margin))
 if min_stability_margin <= 1.0:
-    margin_dot = "🔴"
+    margin_color = "red"
 elif min_stability_margin <= 50.0:
-    margin_dot = "🟠"
+    margin_color = "orange"
 else:
-    margin_dot = "🟢"
+    margin_color = "green"
 
 st.subheader("Performance")
 m1, m2, m3, m4, m5 = st.columns(5)
@@ -541,11 +551,11 @@ m2.metric("Electrical efficiency", f"{perf['eta_electrical'] * 100:.1f} %")
 m3.metric("Isentropic efficiency", f"{perf['eta_isentropic'] * 100:.1f} %")
 m4.metric("Enthalpy extraction ratio", f"{perf['enthalpy_extraction_ratio'] * 100:.1f} %")
 m5.metric(
-    f"{margin_dot} Min stability margin", f"{min_stability_margin:.3g}",
+    "Min stability margin", f":{margin_color}[{min_stability_margin:.3g}]",
     help="Velikhov-ionisation marginal-stability ratio β_crit/β (exact criterion, eq. 5.13), minimum along the "
          "whole channel -- see the Profiles tab's own plot for the full profile, and the Stability tab to explore "
-         "it away from this exact operating point. ≤1 = unstable somewhere in the channel (🔴); "
-         "1-50 = stable, but with little margin (🟠); >50 = comfortably stable (🟢).",
+         "it away from this exact operating point. Red: ≤1, unstable somewhere in the channel. Orange: 1-50, "
+         "stable but with little margin. Green: >50, comfortably stable.",
 )
 
 if channel.choked:
@@ -581,6 +591,7 @@ if active_tab == "📈 Profiles":
     with col1:
         st.plotly_chart(profile_temperature(out), width="stretch", key="plot_temperature")
         st.plotly_chart(profile_primary_gas(out), width="stretch", key="plot_primary_gas")
+        st.plotly_chart(profile_mach_number(out, ideal_gas), width="stretch", key="plot_mach_number")
         st.plotly_chart(profile_density(out, seed_number_density), width="stretch", key="plot_density")
 
     with col2:
@@ -619,6 +630,7 @@ if active_tab == "🔎 Inlet Summary":
         ("Plasma resistivity  η", f"{inlet.resistivity:.3e}", "Ω·m"),
         ("Plasma conductivity  σ", f"{inlet.conductivity:.3e}", "S/m"),
         ("Hall parameter  β", f"{inlet.hall_parameter:.3f}", "-"),
+        ("Ideal channel length  L (Messerle 4.20)", f"{inlet.ideal_channel_length:.4g}", "m"),
         ("Load ratio  Z = R_load/η", f"{Z0:.3f}", "-"),
         ("Power-matched load ratio  Z* = β²+1", f"{Z_matched0:.3f}", "-"),
         ("Current density  J_x (Faraday)", f"{inlet.current_density[0]:,.2f}", "A/m²"),
@@ -675,8 +687,20 @@ if active_tab == "🔎 Inlet Summary":
         f"the neutral gas -- this is exactly the ΔT term in `HallSolver.solve_equilibrium`, and it grows with both β and "
         f"the Mach number."
     )
+    channel_length_ratio = params["length"] / inlet.ideal_channel_length
+    channel_length_note = regime_note(
+        channel_length_ratio, 0.5, 2.0,
+        f"**Shorter than Messerle's estimate** (configured length {params['length']:.3g} m vs. L ≈ "
+        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}): the B-field/flow "
+        f"interaction (Sec. 4.3) may not have room to fully develop before the outlet.",
+        f"**Close to Messerle's estimate** (configured length {params['length']:.3g} m vs. L ≈ "
+        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}).",
+        f"**Longer than Messerle's estimate** (configured length {params['length']:.3g} m vs. L ≈ "
+        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}): well past the "
+        f"interaction length -- note L itself grows fast down the channel too, since u, σ, and p all evolve.",
+    )
 
-    for note in (mach_note, beta_note, z_note, ionization_note, delta_T_note):
+    for note in (mach_note, beta_note, z_note, ionization_note, delta_T_note, channel_length_note):
         st.markdown(f"- {note}")
 
 if active_tab == "🎯 Optimize":

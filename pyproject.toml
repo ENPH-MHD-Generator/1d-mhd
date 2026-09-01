@@ -67,10 +67,11 @@ warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 
-# Neither ships type stubs/a py.typed marker; nothing to check against beyond "did this
-# import resolve at all."
+# None of these ship type stubs/a py.typed marker; nothing to check against beyond "did
+# this import resolve at all." (sympy: only used in tests/test_tapered_derivation_sympy.py,
+# to symbolically verify Derivation.md's variable-area momentum/energy ODEs.)
 [[tool.mypy.overrides]]
-module = ["mpl_toolkits.*", "plotly.*"]
+module = ["mpl_toolkits.*", "plotly.*", "sympy.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

@@ -105,5 +105,24 @@ class Plasma(State):
         denominator = constants.electron_mass * self.momentum_transfer_frequency
         return constants.elementary_charge * self.magnetic_field / denominator
 
+    @property
+    def ideal_channel_length(self) -> float:
+        """Messerle's momentum-equation estimate of the channel (interaction) length,
+        "Interaction Length" Sec. 4.3 eq. (4.19a)/(4.20): treating sigma and B as
+        constant, sigma*u*B is an approximate current density and j x B ~=
+        (sigma*u*B)*B the magnetic (Lorentz) body force per unit volume opposing the
+        flow; L_p = p/(sigma*u*B^2) (eq. 4.19a) is the length over which that force
+        would reduce the inlet pressure by ~1 atm. Rosa's more detailed analysis
+        (cited in the same section) found the actual required length runs about 4x
+        that, DeltaL ~= 4*L_p (eq. 4.20) -- the coefficient used here.
+
+        Returns +inf at B=0 (or, degenerately, sigma=0 or u=0): no Lorentz-force
+        interaction at all means no finite length reduces the pressure, which is the
+        genuine physical limit here, not a numerical error to hide."""
+        denominator = self.conductivity * self.flow_speed * self.magnetic_field ** 2
+        if denominator <= 0.0:
+            return float("inf")
+        return 4.0 * self.gas_pressure / denominator
+
     def __repr__(self) -> str:
         return f"{self.seed_type.name}-seeded {self.gas_type.name} plasma with {self.conductivity:.2f} S/m."

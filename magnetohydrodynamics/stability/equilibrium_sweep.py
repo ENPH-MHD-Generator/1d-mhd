@@ -8,6 +8,7 @@ from magnetohydrodynamics.solver.equilibrium import Equilibrium, EquilibriumInpu
 from magnetohydrodynamics.solver.hall_solver import HallSolver
 from magnetohydrodynamics.stability.friedberg_criterion import FriedbergAsymptoticCriterion, FriedbergCriterion
 from magnetohydrodynamics.stability.stability_grid import StabilityGrid, VolumeGrid
+from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
 from magnetohydrodynamics.typing import Scalar
 
 
@@ -29,7 +30,10 @@ class EquilibriumSweep:
         result = self._hall_solver.solve_equilibrium_batch(**point.as_kwargs())
         return point, result
 
-    def grid(self, x_key: str, x_values: np.ndarray, y_key: str, y_values: np.ndarray) -> StabilityGrid:
+    def grid(
+            self, x_key: str, x_values: np.ndarray, y_key: str, y_values: np.ndarray,
+            fixed_mach_number: float | None = None,
+    ) -> StabilityGrid:
         """Solve the local equilibrium at every (x, y) combination of two physical-knob
         sweep axes and evaluate both stability criteria there, via a single vectorized
         `solve_equilibrium_batch` call instead of one equilibrium (and one Plasma
@@ -39,9 +43,21 @@ class EquilibriumSweep:
         does), the win is purely from replacing 62,500 Python-level calls with one call
         operating on 62,500-element arrays.
 
+        `fixed_mach_number`: when given AND "Tp" is one of `x_key`/`y_key`, v0 is
+        overridden to hold this Mach number fixed as Tp sweeps, instead of holding v0
+        itself fixed at `base.v0` -- see `volume_grid`'s docstring for why (the same
+        reasoning applies to any Tp sweep, not just the 3-D one). Has no effect if
+        "Tp" isn't actually being swept here (base.Tp is a single fixed value, so
+        there's no "wide range" for the Mach number to swing across).
+
         Returns 2-D arrays of shape (len(y_values), len(x_values))."""
         X, Y = np.meshgrid(x_values, y_values)
-        point, result = self._solve(**{x_key: X, y_key: Y})
+        overrides: dict[str, Scalar] = {x_key: X, y_key: Y}
+        if fixed_mach_number is not None and "Tp" in (x_key, y_key):
+            gas_temperature = X if x_key == "Tp" else Y
+            ideal_gas = IdealGas(self._hall_solver.gas_type)
+            overrides["v0"] = ideal_gas.get_flow_speed(fixed_mach_number, gas_temperature)
+        point, result = self._solve(**overrides)
 
         ionization_fraction = result.electron_number_density / result.seed_number_density
         beta = result.hall_parameter
@@ -74,11 +90,14 @@ class EquilibriumSweep:
         )
 
     def matched_load(
-            self, seed_fraction, magnetic_field, gas_temperature,
+            self, seed_fraction, magnetic_field, gas_temperature, flow_speed: Scalar | None = None,
             bracket: tuple[float, float] = (1e-8, 1e4), iters: int = 50,
     ) -> Equilibrium:
         """Vectorized Friedberg (6.10) matched-load (Z=sqrt(1+beta^2)) equilibrium
-        solve: at fixed (seed_fraction, magnetic_field, gas_temperature), finds the
+        solve: at fixed (seed_fraction, magnetic_field, gas_temperature, flow_speed --
+        `flow_speed` defaults to `base.v0` if not given, but callers sweeping a wide
+        `gas_temperature` range may want a Tp-dependent flow_speed instead, e.g. one
+        holding Mach number fixed -- see `volume_grid`'s `fixed_mach_number`), finds the
         load_resistivity for which sqrt(1+beta^2)*eta(load_resistivity) ==
         load_resistivity, i.e. the load resistivity self-consistent with its own
         matched-load condition. Solved by vectorized log-space bisection on
@@ -114,6 +133,8 @@ class EquilibriumSweep:
         agree to within 1e-4 relative at every point of a 45x45x45 grid spanning
         `volume_grid`'s typical ranges (worst case ~6e-6), where the old Picard
         version disagreed at ~50% of points even between iteration 199 and 200."""
+        if flow_speed is None:
+            flow_speed = self._base.v0
         gas_number_density = self._base.p0 / (constants.k * gas_temperature)
         seed_number_density = seed_fraction * gas_number_density
         log_lo, log_hi = np.broadcast_arrays(
@@ -126,7 +147,7 @@ class EquilibriumSweep:
             log_mid = 0.5 * (log_lo + log_hi)
             load_resistivity = 10.0 ** log_mid
             result = self._hall_solver.solve_equilibrium_batch(
-                flow_speed=self._base.v0, gas_temperature=gas_temperature, gas_number_density=gas_number_density,
+                flow_speed=flow_speed, gas_temperature=gas_temperature, gas_number_density=gas_number_density,
                 seed_number_density=seed_number_density, magnetic_field=magnetic_field, load_resistivity=load_resistivity,
             )
             h = np.sqrt(1.0 + result.hall_parameter ** 2) * result.resistivity - load_resistivity
@@ -136,13 +157,34 @@ class EquilibriumSweep:
         assert result is not None, "iters must be >= 1"
         return result
 
-    def volume_grid(self, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray) -> VolumeGrid:
+    def volume_grid(
+            self, seed_fraction_values: np.ndarray, b0_values: np.ndarray, tp_values: np.ndarray,
+            fixed_mach_number: float | None = None,
+    ) -> VolumeGrid:
         """Precomputed 3-D equilibrium/stability table over (seed_fraction, B0, Tp),
         solved with the Friedberg (6.10) matched-load Z=sqrt(1+beta^2) policy
         throughout -- load resistivity is never a free axis here (see `matched_load`;
         Z=beta^2+1, maximizing power outright, was tried first and abandoned: it
         pushed the whole system toward physically unreasonable sub-100K Tp at high
         field).
+
+        `fixed_mach_number`: by default (None) v0 is held fixed at `base.v0`
+        throughout, the same as every other input here. But this sweep's own Tp range
+        typically spans several orders of magnitude (e.g. 1-6000 K) -- holding a
+        single v0 fixed across that means the gas-dynamic Mach number
+        M = v0/sqrt(gamma*k*Tp/m) swings just as wildly (checked: ~8 at the low end of
+        a typical range down to ~0.1 at the high end, for a v0 around 150 m/s), which
+        feeds directly into HallSolver's electron-heating term (ΔT ∝ M^2) and so
+        distorts where the computed stability boundary actually sits at low Tp -- not
+        a cosmetic issue. Passing a Mach number here instead (e.g. the one implied by
+        the sidebar's own current v0/Tp) holds THAT fixed via IdealGas.get_flow_speed,
+        letting v0 vary with the swept Tp so the flow stays at a consistent regime
+        across the whole sweep -- closed-form, no extra root-find, unlike trying to
+        pin down v0 from something that itself depends on the solved equilibrium
+        (e.g. Messerle's interaction-length estimate, Plasma.ideal_channel_length --
+        considered and set aside for exactly that reason: sigma there depends on the
+        equilibrium solve, which depends on v0, which the same equation is trying to
+        solve for).
 
         Solving the WHOLE grid is one vectorized pass via `matched_load`, however
         fine -- a 40x40x40 grid (64,000 points) solves in well under a second, versus
@@ -156,7 +198,10 @@ class EquilibriumSweep:
         margin (beta_crit/beta), stable (margin>=1), Te, ionization_fraction,
         load_power_density."""
         SF, B0, TP = np.meshgrid(seed_fraction_values, b0_values, tp_values, indexing="ij")
-        result = self.matched_load(SF, B0, TP)
+        flow_speed = None
+        if fixed_mach_number is not None:
+            flow_speed = IdealGas(self._hall_solver.gas_type).get_flow_speed(fixed_mach_number, TP)
+        result = self.matched_load(SF, B0, TP, flow_speed=flow_speed)
 
         ionization_fraction = result.electron_number_density / result.seed_number_density
         criterion = FriedbergCriterion()

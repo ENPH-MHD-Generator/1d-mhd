@@ -27,3 +27,13 @@ class GasModel(ABC):
             flow_speed: Scalar,
             gas_temperature: Scalar
     ) -> Scalar: ...
+
+    @abstractmethod
+    def get_flow_speed(
+            self,
+            mach_number: Scalar,
+            gas_temperature: Scalar
+    ) -> Scalar:
+        """Inverse of get_mach_number: the flow speed that gives `mach_number` at
+        `gas_temperature`."""
+        ...

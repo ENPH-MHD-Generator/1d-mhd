@@ -181,8 +181,7 @@ substituting into momentum conservation (and correctly collecting the $\partial 
 $$ \Phi m_p \frac{\partial v_p}{\partial x} = J_y B_z - \Phi k \bigg( \frac{1}{v_p} \frac{\partial T_p}{\partial x} - \frac{T_p}{v_p^2}\frac{\partial v_p}{\partial x} \bigg), $$
 $$ \frac{\partial v_p}{\partial x} \bigg( \Phi m_p - \Phi k\frac{T_p}{v_p^2}\bigg) = J_y B_z - \Phi k \frac{1}{v_p} \frac{\partial T_p}{\partial x}, $$
 
-and solving this *together with* the stagnation-energy equation above (cross-checked with `sympy` -- see
-`tests/test_energy_accounting.py`) gives
+and solving this *together with* the stagnation-energy equation above gives
 
 $$ \frac{\partial T_p}{\partial x} = \frac{\gamma-1}{k}\cdot\frac{S_\Omega m_p v_p^2 - k T_p (J_yB_zv_p + S_\Omega)}{\Phi(m_pv_p^2 - \gamma k T_p)}, $$
 
@@ -191,7 +190,124 @@ $$ \frac{\partial v_p}{\partial x} = \frac{v_p\big(J_yB_zv_p - S_\Omega(\gamma-1
 The shared denominator $m_p v_p^2 - \gamma k T_p = m_p v_p^2(1 - 1/M^2)$ (with $M$ the ordinary, $\gamma$-based Mach
 number) is the classic Rayleigh-flow choking singularity at $M=1$: heat addition to subsonic flow drives it toward
 sonic, and the closed-form march above isn't valid past that point. `HallSolver.march` stops early (and marks
-`Channel.choked = True`) if the flow reaches $M=1$, rather than stepping through the singularity.
+`Channel.choked = True`) if the flow reaches $M=1$ from either side (a supersonic inlet decelerates *down* to $M=1$
+instead, via the same singularity), rather than stepping through it.
+
+**On verification:** the electromagnetic/Ohm's-law closure above (Friedberg 3.2-3.14: $Z$, $\beta$, $\eta$, $\nu_M$,
+$Q$, $\eta_L$) is symbolically cross-checked with `sympy` in `recreating_freidberg.ipynb`. The $\partial T_p/\partial
+x$, $\partial v_p/\partial x$ elimination above is *not* part of that notebook -- it's checked only numerically, in
+`tests/test_energy_accounting.py`, by confirming the stagnation enthalpy actually drops by exactly the load power
+extracted (this is what caught the sign error described in the Correction box above). The tapered-channel version of
+this same elimination below *is* additionally checked symbolically, in `tests/test_tapered_derivation_sympy.py` --
+see that section for why this particular derivation step warranted it.
+
+
+## Variable-Area (Tapered) Channel
+
+Everything above assumes "a channel with zero divergence (same outlet and inlet size)" (the Momentum section's own
+words). This section generalizes to a channel whose cross-sectional area $A(x)$ varies with $x$ -- the standard fix,
+in the real MHD-generator literature this whole derivation is built from (Sutton & Sherman; Rosa), for exactly the
+problem this repo's own stability/performance exploration ran into: a supersonic inlet's heavy electron overheating
+(driving it toward near-total seed ionization, and so toward *stability*) also drives the flow to the $M=1$ choking
+singularity within a fraction of a channel length, in a constant-area duct. Diverging the channel buys back distance
+from that singularity, the same way a supersonic wind-tunnel diffuser does.
+
+This is implemented as a **separate solver**, `magnetohydrodynamics.solver.tapered_hall_solver.TaperedHallSolver`
+-- the constant-area `HallSolver`/`Channel` above are untouched, still validated against the frozen
+`tests/reference_main.py` oracle exactly as before. `TaperedHallSolver` reuses `HallSolver`'s local closure (Ohm's
+law + Saha + electron energy balance, all of Friedberg 3.2-3.14 above, entirely unaffected by area since it's given
+local density/speed/field values regardless of how they arose) by composition, and only replaces the axial-march
+mass/momentum/energy ODEs below.
+
+**Two genuinely different things are happening here, worth keeping separate:**
+
+1. Mass, momentum, and stagnation energy with $A(x)$ (below) are the *rigorous* quasi-1D generalization of the
+   equations above -- not a new approximation on top of the existing one. The same "properties uniform across each
+   cross-section" assumption is being made either way; allowing that cross-section's area to vary axially doesn't
+   weaken it further.
+2. The electromagnetic closure above assumed $v_{py} = v_{pz} = 0$ ("the flow is along the $x$-direction") -- flagged
+   even in the zero-divergence section as **not exactly true in a divergent channel**: following a diverging wall
+   means the flow picks up a small $v_{py} \approx v_{px}\tan\theta$ ($\theta$ the local half-angle). This *is* a new
+   approximation, kept here for tractability (re-deriving Ohm's law with nonzero $v_{py}/v_{pz}$ is future work, not
+   attempted in this pass) -- valid for "gentle" divergence, the same regime real nozzle/diffuser design already
+   restricts itself to (rule of thumb: half-angle below roughly 15°, not independently sourced from either reference
+   here). `TaperedHallSolver` enforces this with a runtime check against a configurable `max_half_angle_deg`
+   (default 15°), raising `DivergenceAngleWarning` (or a hard error in `strict` mode) rather than silently trusting
+   it.
+
+### Taper geometry
+
+The first (and, for now, only) supported profile is a **linear taper**: one wall pair of the square channel held
+fixed, the other diverging at a constant half-angle $\theta$, so the area itself is *exactly* linear in $x$ (not a
+self-similar square taper, where both wall pairs diverge together and area would be quadratic in $x$):
+
+$$ A(x) = A_0 + \frac{dA}{dx}\,x, \qquad \frac{dA}{dx} = 2\sqrt{A_0}\,\tan\theta. $$
+
+The channel is therefore only literally square at the inlet ($x=0$); it becomes a rectangular duct downstream. This
+keeps $dA/dx$ a single precomputed constant (not itself a function of $x$), which is what actually makes "linear
+taper" correct as a description and keeps the ODEs below no more complex than they need to be for a first version.
+
+### Mass, momentum, and stagnation energy with $A(x)$
+
+Let $\Psi = n_p(x)\,v_p(x)\,A(x)$ be the total particle rate through the duct -- constant in $x$, same as $\Phi$
+above was for the zero-divergence case. Define the *local* particle flux
+
+$$ \Phi(x) = \frac{\Psi}{A(x)}, $$
+
+which reduces to the constant $\Phi$ above exactly when $A$ is constant. Then $n_p(x) = \Phi(x)/v_p(x)$, same form
+as before. Dividing the control-volume momentum and stagnation-energy balances through by $A(x)$ (mass flow *rate*
+$\dot m = m_p \Psi$ is still constant, so $\dot m / A(x) = m_p \Phi(x)$):
+
+$$ m_p \Phi(x) \frac{\partial v_p}{\partial x} = J_y B_z - \frac{\partial p_p}{\partial x}, $$
+$$ m_p \Phi(x) \frac{\partial h_0}{\partial x} = J_y B_z v_p + S_\Omega. $$
+
+The stagnation-energy equation picks up **no explicit $dA/dx$ term** -- it's identical in form to the zero-divergence
+case, just with $\Phi(x)$ in place of a constant. All the new physics enters through the momentum equation's
+ideal-gas-law substitution: $p_p(x) = k\Phi(x)T_p(x)/v_p(x)$, and since $\Phi(x) = \Psi/A(x)$,
+
+$$ \frac{\partial \Phi}{\partial x} = -\Phi(x)\cdot\frac{A'(x)}{A(x)}, $$
+
+which, substituted in and with $\partial v_p/\partial x$, $\partial T_p/\partial x$ collected (as before, this
+collection step is exactly where an earlier, zero-divergence version of this kind of elimination introduced a
+sign error -- see the Correction box above -- so it is the step most worth not trusting by hand alone here either):
+
+$$ \Phi\big(m_pv_p^2 - kT_p\big)\frac{\partial v_p}{\partial x} + k\Phi v_p\frac{\partial T_p}{\partial x}
+   = J_yB_zv_p^2 + k\Phi v_p T_p \cdot\frac{A'}{A}, \tag{Eq. A} $$
+$$ m_p\Phi v_p\frac{\partial v_p}{\partial x} + m_p\Phi c_p\frac{\partial T_p}{\partial x} = J_yB_zv_p + S_\Omega. \tag{Eq. B} $$
+
+Solving this $2\times2$ linear system for $(\partial v_p/\partial x, \partial T_p/\partial x)$
+(with $c_p = \gamma k/((\gamma-1)m_p)$), the determinant is $\Phi^2 k(m_pv_p^2 - \gamma k T_p)/(\gamma-1)$ -- **the
+same Rayleigh-flow factor as the zero-divergence case, with no $A'/A$ dependence** -- giving
+
+$$ \frac{\partial T_p}{\partial x} = \frac{\gamma-1}{k}\cdot\frac{S_\Omega m_p v_p^2 - k T_p (J_yB_zv_p + S_\Omega)}{\Phi(x)\big(m_pv_p^2 - \gamma k T_p\big)}
+   \;-\; (\gamma-1)\frac{m_pv_p^2 T_p}{m_pv_p^2 - \gamma k T_p}\cdot\frac{A'(x)}{A(x)}, $$
+
+$$ \frac{\partial v_p}{\partial x} = \frac{v_p\big(J_yB_zv_p - S_\Omega(\gamma-1)\big)}{\Phi(x)\big(m_pv_p^2 - \gamma k T_p\big)}
+   \;+\; \frac{\gamma k T_p v_p}{m_pv_p^2 - \gamma k T_p}\cdot\frac{A'(x)}{A(x)}. $$
+
+Setting $A'(x)=0$ (so $\Phi(x)$ is the constant $\Phi$ again) recovers the zero-divergence $\partial T_p/\partial x$,
+$\partial v_p/\partial x$ above *exactly*, term for term -- the required special case. The $A'/A$ correction term is,
+in both equations, independent of $\Phi$/the mass flow rate entirely (it cancels out of the algebra), and has the
+physically-expected sign on either side of $M=1$: since the shared denominator $m_pv_p^2 - \gamma kT_p$ is negative
+for subsonic flow and positive for supersonic flow, a diverging channel ($A'>0$) makes $\partial v_p/\partial x$
+*more negative* when subsonic (further deceleration -- the classical subsonic-diffuser result) but *more positive*
+when supersonic (further acceleration, away from $M=1$) -- exactly the mechanism this section exists to use. This
+hand-derivation is symbolically verified (both in general, and in the $A'=0$ limit against the equations above) in
+`tests/test_tapered_derivation_sympy.py`, encoding Eq. A/Eq. B directly and solving rather than differentiating --
+closer to where the historical bug actually was (an algebraic elimination error, not a differentiation one).
+
+Because the shared denominator is untouched by the area terms, `TaperedHallSolver`'s choking/bisection logic (finding
+the largest step that doesn't cross $M=1$, from either side) is structurally identical to `HallSolver.march`'s --
+only the $\partial T_p/\partial x$, $\partial v_p/\partial x$ evaluated at each step differ.
+
+One more consequence of $A$ varying: `HallSolver.march` converts a single lumped external load resistance $R_{load}$
+[$\Omega$] into the load resistivity $\eta_L$ the per-slice closure above actually needs via $\eta_L = R_{load}A/L$
+(code only -- not stated as an equation elsewhere in this document). With $A(x)$, this becomes a per-slice quantity,
+
+$$ \eta_L(x) = R_{load}\cdot\frac{A(x)}{L}, $$
+
+varying station to station instead of being one number for the whole channel, but otherwise fed into the same,
+unmodified per-slice Ohm's-law closure above.
 
 
 ## Process

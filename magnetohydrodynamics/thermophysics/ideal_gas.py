@@ -35,3 +35,15 @@ class IdealGas(GasModel):
         m_particle = self.gas_type.particle_mass
         gamma = self.gas_type.heat_capacity_ratio
         return np.sqrt((m_particle * flow_speed**2) / (gamma * constants.k * gas_temperature))
+
+    def get_flow_speed(
+            self,
+            mach_number: Scalar,
+            gas_temperature: Scalar
+    ) -> Scalar:
+        """Inverse of get_mach_number: v = M * sqrt(gamma k T / m) -- the flow speed
+        that holds Mach number fixed at `mach_number` as `gas_temperature` varies
+        (used by EquilibriumSweep's fixed_mach_number sweeps, see its docstring)."""
+        m_particle = self.gas_type.particle_mass
+        gamma = self.gas_type.heat_capacity_ratio
+        return mach_number * np.sqrt((gamma * constants.k * gas_temperature) / m_particle)

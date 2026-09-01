@@ -32,6 +32,7 @@ from scipy import constants
 from magnetohydrodynamics.operating_point import OperatingPoint
 from magnetohydrodynamics.presets import build_default_hall_solver, default_gas_type, default_seed_type
 from magnetohydrodynamics.stability import EquilibriumSweep, SeedDensityBounds, StabilityBoundaryMesh
+from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
 
 COLOR_EXACT = "#111111"
 COLOR_ASYMPTOTIC = "#2ca02c"
@@ -113,13 +114,13 @@ def make_axis_array(op_key: str, bounds: tuple[float, float], n: int) -> np.ndar
 def compute_2d_grid(
         base: OperatingPoint, ionization_potential: float,
         x_key: str, x_bounds: tuple[float, float], y_key: str, y_bounds: tuple[float, float],
-        resolution: int,
+        resolution: int, fixed_mach_number: float | None,
 ) -> dict:
     hall_solver, _ = build_default_hall_solver()
     sweep = EquilibriumSweep(hall_solver, base, ionization_potential)
     x_values = make_axis_array(x_key, x_bounds, resolution)
     y_values = make_axis_array(y_key, y_bounds, resolution)
-    grid = sweep.grid(x_key, x_values, y_key, y_values)
+    grid = sweep.grid(x_key, x_values, y_key, y_values, fixed_mach_number=fixed_mach_number)
     return dict(grid=grid, x_values=x_values, y_values=y_values)
 
 
@@ -140,14 +141,14 @@ def compute_load_resistivity_surface(
 def compute_mesh(
         base: OperatingPoint, ionization_potential: float, level: float,
         sf_bounds: tuple[float, float], b0_bounds: tuple[float, float], tp_bounds: tuple[float, float],
-        resolution: int,
+        resolution: int, fixed_mach_number: float | None,
 ) -> dict:
     hall_solver, _ = build_default_hall_solver()
     sweep = EquilibriumSweep(hall_solver, base, ionization_potential)
     sf_values = make_axis_array("seed_fraction", sf_bounds, resolution)
     b0_values = make_axis_array("B0", b0_bounds, resolution)
     tp_values = make_axis_array("Tp", tp_bounds, resolution)
-    volume = sweep.volume_grid(sf_values, b0_values, tp_values)
+    volume = sweep.volume_grid(sf_values, b0_values, tp_values, fixed_mach_number=fixed_mach_number)
     mesh = StabilityBoundaryMesh(volume, sf_values, b0_values, tp_values)
     try:
         vertices, faces, vertex_power = mesh.extract(level=level)
@@ -323,7 +324,7 @@ def render(ui_values: dict) -> None:
         "operating point) -- change a slider on the left and these update too."
     )
 
-    ctrl1, ctrl2, ctrl3 = st.columns([1, 1, 1])
+    ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([1, 1, 1, 1])
     with ctrl1:
         target_power_mw = st.slider("Target power density S_C [MW/m³]", 10.0, 500.0, 100.0, step=10.0, key="stability_target_power")
     with ctrl2:
@@ -338,7 +339,21 @@ def render(ui_values: dict) -> None:
             help="Checked: use this tab's own default sweep ranges. Unchecked: use each variable's own sidebar "
                  "slider bounds (the \"⚙️\" popover next to it) instead.",
         )
+    with ctrl4:
+        fix_mach_number = st.checkbox(
+            "Fix Mach number (not velocity)", value=True, key="stability_fix_mach_number",
+            help="Affects any plot below that sweeps T_p (currently the 2-D Boundary plot, if T_p is one of its "
+                 "axes, and the 3-D Mesh, which always does): whether v₀ is held at the sidebar's current value "
+                 "throughout the sweep, or the *Mach number* implied by the sidebar's current v₀/T_p is held fixed "
+                 "instead, letting v₀ vary with T_p to match. Checked (default) is usually what you want -- T_p "
+                 "sweeps here span 1-6000 K, and holding a single v₀ fixed across that makes the Mach number swing "
+                 "from deep subsonic to hypersonic (M ≈ 8 at T_p = 1 K for a typical v₀), which feeds straight into "
+                 "the electron-heating term (ΔT ∝ M²) and distorts where the boundary actually sits at low T_p. "
+                 "Uncheck to go back to literally fixing v₀ instead.",
+        )
     target_power_density = target_power_mw * 1e6
+    ideal_gas = IdealGas(default_gas_type())
+    fixed_mach_number = float(ideal_gas.get_mach_number(base.v0, base.Tp)) if fix_mach_number else None
 
     # st.tabs() looked like the natural fit here, but its active-tab selection is purely
     # frontend state that can reset to the first tab on a rerun triggered by an unrelated
@@ -376,7 +391,7 @@ def render(ui_values: dict) -> None:
         else:
             x_bounds = axis_bounds(x_key, use_default_bounds)
             y_bounds = axis_bounds(y_key, use_default_bounds)
-            data = compute_2d_grid(base, ionization_potential, x_key, x_bounds, y_key, y_bounds, resolution=90)
+            data = compute_2d_grid(base, ionization_potential, x_key, x_bounds, y_key, y_bounds, resolution=90, fixed_mach_number=fixed_mach_number)
             st.plotly_chart(
                 plot_2d_boundary(
                     data, base, x_key, y_key, AXES[x_key].label, AXES[y_key].label, AXES[x_key].log, AXES[y_key].log, margin_level,
@@ -395,7 +410,7 @@ def render(ui_values: dict) -> None:
         sf_bounds = axis_bounds("seed_fraction", use_default_bounds)
         b0_bounds = axis_bounds("B0", use_default_bounds)
         tp_bounds = axis_bounds("Tp", use_default_bounds)
-        data = compute_mesh(base, ionization_potential, margin_level, sf_bounds, b0_bounds, tp_bounds, resolution=45)
+        data = compute_mesh(base, ionization_potential, margin_level, sf_bounds, b0_bounds, tp_bounds, resolution=45, fixed_mach_number=fixed_mach_number)
         fig = plot_mesh(data, base)
         if fig is None:
             st.info(

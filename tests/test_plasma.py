@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from magnetohydrodynamics.plasma.plasma import Plasma
@@ -42,6 +44,22 @@ def test_hall_parameter_matches_reference(main_ref, plasma):
 
 def test_conductivity_is_inverse_of_resistivity(plasma):
     assert plasma.conductivity == pytest.approx(1.0 / plasma.resistivity, rel=1e-12)
+
+
+def test_ideal_channel_length_matches_messerle_eq_4_20(plasma):
+    expected = 4.0 * plasma.gas_pressure / (plasma.conductivity * plasma.flow_speed * plasma.magnetic_field ** 2)
+    assert plasma.ideal_channel_length == pytest.approx(expected, rel=1e-12)
+
+
+def test_ideal_channel_length_is_infinite_at_zero_field(plasma):
+    """B=0 means no Lorentz-force interaction at all -- no finite length reduces the
+    pressure, which should read as +inf, not raise (ZeroDivisionError on a bare
+    p/(sigma*u*B**2) with B=0.0) or silently return something finite-looking."""
+    zero_field_plasma = Plasma(
+        gas_state=dataclasses.replace(plasma.gas_state, magnetic_field=0.0),
+        ionization_state=plasma.ionization_state,
+    )
+    assert zero_field_plasma.ideal_channel_length == float("inf")
 
 
 def test_properties_delegate_to_component_states(plasma):

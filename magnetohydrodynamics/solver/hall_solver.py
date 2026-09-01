@@ -24,9 +24,11 @@ class Channel(Geometry):
     states: list[Plasma] = field(default_factory=list)
     load_resistivity: float = 0.0
     choked: bool = False
-    """True if the march stopped early because the flow reached HallSolver.max_mach_number
-    (the closed-form axial ODEs are singular at M=1 -- see Derivation.md's Momentum section).
-    When True, `states`/`x` are shorter than the requested `num_slices`."""
+    """True if the march stopped early because the flow reached (thermal, Rayleigh-flow)
+    choking at M=1 -- the closed-form axial ODEs are singular there (see Derivation.md's
+    Momentum section) -- approached either from a subsonic inlet accelerating up to
+    HallSolver.max_mach_number, or a supersonic inlet decelerating down to its mirror
+    image about M=1. When True, `states`/`x` are shorter than the requested `num_slices`."""
 
     def __len__(self) -> int:
         return len(self.states)
@@ -92,6 +94,10 @@ class HallSolver:
     @property
     def max_mach_number(self) -> float:
         return self._max_mach_number
+
+    @property
+    def gas_type(self) -> GasType:
+        return self._gas_type
 
     def _iterate_equilibrium(
             self,
@@ -314,22 +320,44 @@ class HallSolver:
                 mach_new = np.sqrt(m_particle * u_new ** 2 / (gamma * constants.k * T_new))
                 return T_new, u_new, mach_new
 
-            # The closed-form dT_p/dx, dv_p/dx above are singular at M=1 (Rayleigh-flow
-            # choking -- see Derivation.md's Momentum section), so a fixed-size Euler step
-            # can overshoot M=1 by a lot right next to it. Bisect the step size so the march
-            # lands right at the sonic limit instead of jumping past the singularity.
-            _, _, mach_full_step = step_to(dx)
-            step_size = dx
-            if mach_full_step >= self._max_mach_number:
+            def bisect_step_size(threshold: float, safe_below: bool) -> float:
+                """Largest step_size in [0, dx] for which step_to's Mach number is still
+                on the safe side of `threshold` (below it if `safe_below`, above it
+                otherwise) -- assumes step_to's Mach number moves monotonically toward
+                `threshold` over [0, dx], which both callers below rely on."""
                 lo, hi = 0.0, dx
                 for _ in range(50):
                     mid = 0.5 * (lo + hi)
                     _, _, mach_mid = step_to(mid)
-                    if mach_mid < self._max_mach_number:
+                    is_safe = mach_mid < threshold if safe_below else mach_mid > threshold
+                    if is_safe:
                         lo = mid
                     else:
                         hi = mid
-                step_size = lo
+                return lo
+
+            # The closed-form dT_p/dx, dv_p/dx above are singular at M=1 (Rayleigh-flow
+            # choking -- see Derivation.md's Momentum section), so a fixed-size Euler step
+            # can overshoot M=1 by a lot right next to it. Bisect the step size so the march
+            # lands right at the sonic limit instead of jumping past the singularity.
+            #
+            # Heat addition drives Rayleigh flow toward M=1 from EITHER side: it accelerates
+            # a subsonic flow up to it, but decelerates a supersonic one down to it (denom
+            # above changes sign exactly at M=1, which is what flips dudx's sign between the
+            # two regimes -- the physics already handles both; this bisection has to pick the
+            # matching direction). current_mach (not mach_full_step) decides which regime
+            # we're in, since a big enough dx could in principle carry mach_full_step across
+            # the boundary either way.
+            current_mach = np.sqrt(m_particle * flow_speed ** 2 / (gamma * constants.k * gas_temperature))
+            _, _, mach_full_step = step_to(dx)
+            step_size = dx
+            if current_mach > 1.0:
+                min_mach_number = 2.0 - self._max_mach_number  # e.g. 1.01 when max_mach_number=0.99 -- the mirror image about M=1
+                if mach_full_step <= min_mach_number:
+                    step_size = bisect_step_size(min_mach_number, safe_below=False)
+                    choked = True
+            elif mach_full_step >= self._max_mach_number:
+                step_size = bisect_step_size(self._max_mach_number, safe_below=True)
                 choked = True
 
             gas_temperature, flow_speed, _ = step_to(step_size)
