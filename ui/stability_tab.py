@@ -15,9 +15,9 @@ threshold (>1.0 asks for a stability *buffer* before calling something stable; <
 relaxes how close to marginal still counts as "stable enough") -- the threshold shifts
 every boundary line/surface in this tab, not just a fixed margin==1 crossing.
 
-Sweep axis bounds default to this module's own ranges, or -- with "Use default
-bounds" unchecked -- to whatever bounds the user has set on that variable's own
-sidebar slider (the same "⚙️" popover bounds, read directly out of session_state).
+Sweep axis bounds default to this module's own ranges, or, with "Use Default
+Bounds" unchecked, to whatever bounds the user has set on that variable's own
+sidebar slider (the same bounds-adjustment popover, read directly out of session_state).
 """
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ AXES: dict[str, AxisSpec] = {
     "Tp": AxisSpec(ui_key="inlet_gas_temperature", label="T_p [K]", log=True, default=(1.0, 6000.0), ui_to_op=lambda v: v),
     "p0": AxisSpec(ui_key="inlet_pressure_kpa", label="p₀ [Pa]", log=True, default=(1e3, 1e5), ui_to_op=lambda v: v * 1e3),
     "v0": AxisSpec(ui_key="inlet_speed", label="v₀ [m/s]", log=False, default=(20.0, 500.0), ui_to_op=lambda v: v),
-    "seed_fraction": AxisSpec(ui_key="seed_fraction_log10", label="seed fraction", log=True, default=(1e-5, 1e-1), ui_to_op=lambda v: 10.0 ** v),
+    "seed_fraction": AxisSpec(ui_key="seed_fraction_log10", label="Seed Fraction", log=True, default=(1e-5, 1e-1), ui_to_op=lambda v: 10.0 ** v),
     "load_resistivity": AxisSpec(ui_key="load_resistivity", label="η_L [Ω·m]", log=True, default=(1e-2, 2.0), ui_to_op=lambda v: v),
 }
 
@@ -217,7 +217,7 @@ def plot_2d_boundary(
     fig.update_xaxes(title=x_label, type="log" if x_log else "linear")
     fig.update_yaxes(title=y_label, type="log" if y_log else "linear")
     fig.update_layout(
-        title=dict(text=f"Stability boundary: {x_label} vs. {y_label}", font=dict(size=13)),
+        title=dict(text=f"Stability Boundary: {x_label} vs. {y_label}", font=dict(size=13)),
         height=520, margin=dict(l=60, r=60, t=40, b=40),
         # uirevision keyed on which axes are swept -- switching axes changes what's even
         # being plotted, so THAT should reset zoom/pan, but a re-render at the same axis
@@ -245,9 +245,9 @@ def plot_load_resistivity_surface(data: dict, base: OperatingPoint) -> go.Figure
         ),
     ])
     fig.update_layout(
-        title=dict(text="Critical load resistivity η_L(B₀, seed fraction)", font=dict(size=13)),
+        title=dict(text="Critical Load Resistivity η_L(B₀, Seed Fraction)", font=dict(size=13)),
         scene=dict(
-            xaxis_title="log10(seed fraction)", yaxis_title="B₀ [T]", zaxis_title="log10(η_L [Ω·m])",
+            xaxis_title="log10(Seed Fraction)", yaxis_title="B₀ [T]", zaxis_title="log10(η_L [Ω·m])",
         ),
         height=560, margin=dict(l=0, r=0, t=40, b=0),
         uirevision="surface",  # keep the camera's rotation/zoom across re-renders with new data
@@ -276,8 +276,8 @@ def plot_mesh(data: dict, base: OperatingPoint) -> go.Figure | None:
         ),
     ])
     fig.update_layout(
-        title=dict(text=f"Stability boundary surface -- {len(faces):,} faces, drag to rotate", font=dict(size=13)),
-        scene=dict(xaxis_title="log10(seed fraction)", yaxis_title="B₀ [T]", zaxis_title="T_p [K]"),
+        title=dict(text=f"Stability Boundary Surface ({len(faces):,} Faces, Interactive Rotation)", font=dict(size=13)),
+        scene=dict(xaxis_title="log10(Seed Fraction)", yaxis_title="B₀ [T]", zaxis_title="T_p [K]"),
         height=600, margin=dict(l=0, r=0, t=40, b=0),
         uirevision="mesh",  # keep the camera's rotation/zoom across re-renders with new data
     )
@@ -291,7 +291,7 @@ def plot_seed_ceiling(data: dict) -> go.Figure:
     fig.update_xaxes(title="Hall parameter β (design target)", type="log")
     fig.update_yaxes(title="maximum seed fraction (ceiling)", type="log")
     fig.update_layout(
-        title=dict(text="Maximum allowable seed density at fixed T_e", font=dict(size=13)),
+        title=dict(text="Maximum Allowable Seed Density at Fixed T_e", font=dict(size=13)),
         height=420, margin=dict(l=60, r=60, t=40, b=40), hovermode="x unified",
         uirevision="ceiling",  # keep zoom/pan across re-renders with new data
     )
@@ -307,8 +307,8 @@ def plot_seed_window(data: dict) -> go.Figure:
         go.Surface(x=te, y=beta, z=log_min.T, colorscale=[[0, "#1f77b4"], [1, "#1f77b4"]], showscale=False, name="min (power floor)"),
     ])
     fig.update_layout(
-        title=dict(text="Seed density window: stability ceiling (orange) vs. power floor (blue)", font=dict(size=13)),
-        scene=dict(xaxis_title="T_e [K]", yaxis_title="β", zaxis_title="log10(seed fraction)"),
+        title=dict(text="Seed Density Window: Stability Ceiling (Orange) vs. Power Floor (Blue)", font=dict(size=13)),
+        scene=dict(xaxis_title="T_e [K]", yaxis_title="β", zaxis_title="log10(Seed Fraction)"),
         height=560, margin=dict(l=0, r=0, t=40, b=0),
         uirevision="window",  # keep the camera's rotation/zoom across re-renders with new data
     )
@@ -320,36 +320,37 @@ def render(ui_values: dict) -> None:
     ionization_potential = default_seed_type().ionization_potential
 
     st.caption(
-        "Every plot below holds its non-swept inputs at the sidebar's current values (not a fixed default "
-        "operating point) -- change a slider on the left and these update too."
+        "Every plot below holds its non-swept inputs at the sidebar's current values, rather than a fixed "
+        "default operating point, so changing a slider on the left updates these plots as well."
     )
 
     ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([1, 1, 1, 1])
     with ctrl1:
-        target_power_mw = st.slider("Target power density S_C [MW/m³]", 10.0, 500.0, 100.0, step=10.0, key="stability_target_power")
+        target_power_mw = st.slider("Target Power Density S_C [MW/m³]", 10.0, 500.0, 100.0, step=10.0, key="stability_target_power")
     with ctrl2:
         margin_level = st.slider(
-            "Stability margin threshold β_crit/β", 0.5, 1.5, 1.0, step=0.05, key="stability_margin_level",
-            help="1.0 = exactly marginal stability. >1.0 asks for a safety buffer; <1.0 relaxes how close to "
-                 "marginal still counts as \"stable\". Shifts the boundary line/surface in every plot below.",
+            "Stability Margin Threshold (β_crit/β)", 0.5, 1.5, 1.0, step=0.05, key="stability_margin_level",
+            help="A value of 1.0 corresponds to exactly marginal stability. A value above 1.0 requires a safety "
+                 "buffer; a value below 1.0 relaxes how close to marginal still counts as stable. This shifts the "
+                 "boundary line or surface in every plot below.",
         )
     with ctrl3:
         use_default_bounds = st.checkbox(
-            "Use default bounds", value=True, key="stability_use_default_bounds",
-            help="Checked: use this tab's own default sweep ranges. Unchecked: use each variable's own sidebar "
-                 "slider bounds (the \"⚙️\" popover next to it) instead.",
+            "Use Default Bounds", value=True, key="stability_use_default_bounds",
+            help="When checked, uses this tab's own default sweep ranges. When unchecked, uses each variable's "
+                 "own sidebar slider bounds (set via the bounds-adjustment popover next to it) instead.",
         )
     with ctrl4:
         fix_mach_number = st.checkbox(
-            "Fix Mach number (not velocity)", value=True, key="stability_fix_mach_number",
-            help="Affects any plot below that sweeps T_p (currently the 2-D Boundary plot, if T_p is one of its "
-                 "axes, and the 3-D Mesh, which always does): whether v₀ is held at the sidebar's current value "
-                 "throughout the sweep, or the *Mach number* implied by the sidebar's current v₀/T_p is held fixed "
-                 "instead, letting v₀ vary with T_p to match. Checked (default) is usually what you want -- T_p "
-                 "sweeps here span 1-6000 K, and holding a single v₀ fixed across that makes the Mach number swing "
-                 "from deep subsonic to hypersonic (M ≈ 8 at T_p = 1 K for a typical v₀), which feeds straight into "
-                 "the electron-heating term (ΔT ∝ M²) and distorts where the boundary actually sits at low T_p. "
-                 "Uncheck to go back to literally fixing v₀ instead.",
+            "Fix Mach Number (Not Velocity)", value=True, key="stability_fix_mach_number",
+            help="Affects any plot below that sweeps T_p: currently the 2-D Boundary plot, when T_p is one of "
+                 "its axes, and the 3-D Mesh, which always does. Determines whether v₀ is held at the sidebar's "
+                 "current value throughout the sweep, or whether the Mach number implied by the sidebar's "
+                 "current v₀ and T_p is held fixed instead, letting v₀ vary with T_p to match. The default "
+                 "(checked) is usually preferable: T_p sweeps here span 1 to 6000 K, and holding a single v₀ "
+                 "fixed across that range makes the Mach number swing from deep subsonic to hypersonic "
+                 "(M ≈ 8 at T_p = 1 K for a typical v₀), which feeds directly into the electron-heating term "
+                 "(ΔT ∝ M²) and distorts where the boundary actually sits at low T_p. Uncheck to fix v₀ instead.",
         )
     target_power_density = target_power_mw * 1e6
     ideal_gas = IdealGas(default_gas_type())
@@ -368,13 +369,13 @@ def render(ui_values: dict) -> None:
     # rerun), only the SELECTED section's body runs below -- a deliberate bonus, not a side
     # effect: the other three sub-tabs' computations (see [[stability-performance-profiling]]
     # for how much some of them cost) no longer run at all while hidden.
-    SUB_TAB_LABELS = ["📐 2-D Boundary", "🌐 Load-Resistivity Surface", "🧊 3-D Mesh", "🪟 Seed-Density Window"]
+    SUB_TAB_LABELS = ["2-D Boundary", "Load-Resistivity Surface", "3-D Mesh", "Seed-Density Window"]
     active_sub_tab = st.segmented_control(
         "Stability view", SUB_TAB_LABELS, default=SUB_TAB_LABELS[0], required=True,
         key="stability_sub_tab", label_visibility="collapsed",
     )
 
-    if active_sub_tab == "📐 2-D Boundary":
+    if active_sub_tab == "2-D Boundary":
         axis_options = list(AXES)
 
         def axis_label(key: str) -> str:
@@ -382,12 +383,12 @@ def render(ui_values: dict) -> None:
 
         c1, c2 = st.columns(2)
         with c1:
-            x_key = st.selectbox("X axis", axis_options, index=axis_options.index("B0"), format_func=axis_label, key="stability_2d_x")
+            x_key = st.selectbox("X Axis", axis_options, index=axis_options.index("B0"), format_func=axis_label, key="stability_2d_x")
         with c2:
-            y_key = st.selectbox("Y axis", axis_options, index=axis_options.index("seed_fraction"), format_func=axis_label, key="stability_2d_y")
+            y_key = st.selectbox("Y Axis", axis_options, index=axis_options.index("seed_fraction"), format_func=axis_label, key="stability_2d_y")
 
         if x_key == y_key:
-            st.warning("Pick two different axes.")
+            st.warning("Select two different axes.")
         else:
             x_bounds = axis_bounds(x_key, use_default_bounds)
             y_bounds = axis_bounds(y_key, use_default_bounds)
@@ -399,14 +400,17 @@ def render(ui_values: dict) -> None:
                 width="stretch", key="plot_stability_2d",
             )
 
-    if active_sub_tab == "🌐 Load-Resistivity Surface":
+    if active_sub_tab == "Load-Resistivity Surface":
         sf_bounds = axis_bounds("seed_fraction", use_default_bounds)
         b0_bounds = axis_bounds("B0", use_default_bounds)
         data = compute_load_resistivity_surface(base, ionization_potential, margin_level, sf_bounds, b0_bounds, resolution=22)
         st.plotly_chart(plot_load_resistivity_surface(data, base), width="stretch", key="plot_stability_surface")
-        st.caption("Everything above the surface has higher load resistivity than critical -- more stable.")
+        st.caption(
+            "Everything above the surface has a load resistivity higher than the critical value, corresponding "
+            "to greater stability."
+        )
 
-    if active_sub_tab == "🧊 3-D Mesh":
+    if active_sub_tab == "3-D Mesh":
         sf_bounds = axis_bounds("seed_fraction", use_default_bounds)
         b0_bounds = axis_bounds("B0", use_default_bounds)
         tp_bounds = axis_bounds("Tp", use_default_bounds)
@@ -414,18 +418,18 @@ def render(ui_values: dict) -> None:
         fig = plot_mesh(data, base)
         if fig is None:
             st.info(
-                f"No boundary found at margin = {margin_level:g} within the swept (seed fraction, B₀, T_p) "
-                "range -- try widening the bounds or a different margin threshold."
+                f"No boundary was found at margin = {margin_level:g} within the swept (seed fraction, B₀, T_p) "
+                "range. Try widening the bounds or choosing a different margin threshold."
             )
         else:
             st.plotly_chart(fig, width="stretch", key="plot_stability_mesh")
         st.caption(
-            "Solved on a matched-load (Z=√(1+β²)) equilibrium grid -- load resistivity itself isn't swept here. "
-            "Rendered directly with Plotly's own rotation instead of the static \"stable direction\" arrows the "
-            "matplotlib version (examples/stability_boundary_mesh.py) needs."
+            "Solved on a matched-load (Z = √(1 + β²)) equilibrium grid; load resistivity itself is not swept "
+            "here. Rendered directly with Plotly's own rotation, rather than the static stable-direction arrows "
+            "the matplotlib version (examples/stability_boundary_mesh.py) requires."
         )
 
-    if active_sub_tab == "🪟 Seed-Density Window":
+    if active_sub_tab == "Seed-Density Window":
         data = compute_seed_density_window(base, target_power_density, margin_level)
         wc1, wc2 = st.columns(2)
         with wc1:
@@ -433,8 +437,8 @@ def render(ui_values: dict) -> None:
         with wc2:
             st.plotly_chart(plot_seed_window(data), width="stretch", key="plot_stability_window")
         st.caption(
-            "Both hold T_e prescribed rather than solving HallSolver's self-consistent equilibrium for it -- see "
-            "SeedDensityBounds' docstring for why. The power floor uses the sidebar's own inlet density/speed as "
-            "its reference, so (unlike Friedberg's own reference furnace conditions) the valid window's size is "
-            "sensitive to how dense/fast the current sidebar configuration is."
+            "Both hold T_e prescribed, rather than solving HallSolver's self-consistent equilibrium for it; see "
+            "the SeedDensityBounds docstring for the rationale. The power floor uses the sidebar's own inlet "
+            "density and speed as its reference, so, unlike Friedberg's reference furnace conditions, the valid "
+            "window's size is sensitive to the density and speed of the current sidebar configuration."
         )

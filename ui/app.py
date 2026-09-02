@@ -70,16 +70,16 @@ COLOR_RED = "#d62728"
 # Parameters the UI exposes, keyed by the name used in both `st.session_state`
 # and `build_march_params`. (full label, default min, default max, default value, step)
 UI_PARAMS = {
-    "channel_side_mm": ("Channel side (square cross-section) [mm]", 10.0, 200.0, 48.0, 1.0),
-    "channel_length": ("Channel length [m]", 0.02, 1.0, 0.2, 0.01),
-    "inlet_gas_temperature": ("Inlet gas temperature [K]", 300.0, 5000.0, 2000.0, 50.0),
-    "inlet_pressure_kpa": ("Inlet pressure [kPa]", 1.0, 500.0, 10.01, 0.5),
-    "inlet_speed": ("Inlet speed [m/s]", 1.0, 1000.0, 150.115, 1.0),
-    "magnetic_field": ("Magnetic field [T]", 0.0, 3.0, 0.5, 0.05),
-    "seed_fraction_log10": ("log10(seed fraction)", -5.0, -1.0, float(np.log10(6.18e-3)), 0.05),
-    "load_resistivity": ("Load resistivity [Ω·m]", 0.001, 2.0, 0.1171875, 0.001),
+    "channel_side_mm": ("Channel Side (Square Cross-Section) [mm]", 10.0, 200.0, 48.0, 1.0),
+    "channel_length": ("Channel Length [m]", 0.02, 1.0, 0.2, 0.01),
+    "inlet_gas_temperature": ("Inlet Gas Temperature [K]", 300.0, 5000.0, 2000.0, 50.0),
+    "inlet_pressure_kpa": ("Inlet Pressure [kPa]", 1.0, 500.0, 10.01, 0.5),
+    "inlet_speed": ("Inlet Speed [m/s]", 1.0, 1000.0, 150.115, 1.0),
+    "magnetic_field": ("Magnetic Field [T]", 0.0, 3.0, 0.5, 0.05),
+    "seed_fraction_log10": ("log10(Seed Fraction)", -5.0, -1.0, float(np.log10(6.18e-3)), 0.05),
+    "load_resistivity": ("Load Resistivity [Ω·m]", 0.001, 2.0, 0.1171875, 0.001),
 }
-NUM_SLICES_PARAMS = ("Axial slices", 20, 400, 200, 10)
+NUM_SLICES_PARAMS = ("Axial Slices", 20, 400, 200, 10)
 
 # Short labels for the sidebar's inline (label-left-of-slider) layout; the full labels above
 # remain in use everywhere else (Optimize tabs, results tables, plot axes).
@@ -91,14 +91,14 @@ SIDEBAR_SHORT_LABELS = {
     "inlet_pressure_kpa": "Inlet p [kPa]",
     "inlet_speed": "Inlet v [m/s]",
     "magnetic_field": "B [T]",
-    "seed_fraction_log10": "log10(seed)",
+    "seed_fraction_log10": "log10(Seed)",
     "load_resistivity": "R_load [Ω·m]",
 }
 
 OBJECTIVES = {
-    "Load power (PL)": lambda out, params, perf: perf["PL"],
-    "Electrical efficiency": lambda out, params, perf: perf["eta_electrical"],
-    "Enthalpy extraction ratio": lambda out, params, perf: perf["enthalpy_extraction_ratio"],
+    "Load Power (P_L)": lambda out, params, perf: perf["PL"],
+    "Electrical Efficiency": lambda out, params, perf: perf["eta_electrical"],
+    "Enthalpy Extraction Ratio": lambda out, params, perf: perf["enthalpy_extraction_ratio"],
 }
 
 # The parameters the multi-parameter optimizer searches over: everything actually
@@ -310,7 +310,7 @@ def bounded_slider(key: str, label: str, default_lo: float, default_hi: float, d
         # Empty label -> just the popover's own built-in chevron, no emoji/text competing
         # for space in this narrow column.
         with st.popover("", width="stretch", help=f"Adjust bounds for {label}"):
-            st.markdown(f"**{label}**  \nAdjust slider bounds")
+            st.markdown(f"**{label}**  \nAdjust the slider bounds.")
             # Private widget keys with an explicit `value=`, copied into the persistent
             # lo_key/hi_key by hand below -- NOT `key=lo_key`/`key=hi_key` directly. A
             # popover's contents, like a dialog's (see tapered_channel_dialog's own
@@ -323,7 +323,7 @@ def bounded_slider(key: str, label: str, default_lo: float, default_hi: float, d
             st.session_state[lo_key] = new_lo
             st.session_state[hi_key] = new_hi
             if bounds_invalid:
-                st.caption("⚠️ Min must be less than max -- using defaults until fixed.")
+                st.caption("⚠️ Minimum must be less than maximum. Using the defaults until this is corrected.")
             if st.button("Reset to default", key=f"reset_bounds_{key}", width="stretch"):
                 st.session_state["pending_apply"] = {lo_key: default_lo, hi_key: default_hi}
                 st.rerun()
@@ -338,10 +338,10 @@ def tapered_channel_dialog() -> None:
     an occasional, advanced setting (off by default), not something tweaked every run
     the way the inlet conditions are."""
     st.caption(
-        "Diverge (or converge) the channel linearly from inlet to outlet, instead of "
-        "holding its cross-section constant -- buys back distance from Rayleigh-flow "
-        "choking for a supersonic inlet (see the Profiles tab's Mach number plot), at "
-        "the cost of an approximation (below) that only holds for gentle angles."
+        "Diverges (or converges) the channel linearly from inlet to outlet, instead of holding its cross-section "
+        "constant. This buys back distance from Rayleigh-flow choking for a supersonic inlet (see the Mach "
+        "number plot on the Profiles tab), at the cost of an approximation, below, that holds only for gentle "
+        "angles."
     )
     # The checkbox/slider below are bound to PRIVATE widget keys, not directly to the
     # persistent "tapered_channel_enabled"/"tapered_area_ratio" settings -- st.dialog
@@ -356,14 +356,15 @@ def tapered_channel_dialog() -> None:
     # then a plain session_state entry, never bound to this widget's own lifecycle, so
     # it survives the dialog closing/reopening and every other rerun.
     enabled = st.checkbox(
-        "Enable tapered channel", value=st.session_state["tapered_channel_enabled"],
+        "Enable Tapered Channel", value=st.session_state["tapered_channel_enabled"],
         key="_tapered_channel_enabled_widget",
     )
     st.session_state["tapered_channel_enabled"] = enabled
     area_ratio = st.slider(
-        "Area ratio (outlet / inlet)", 0.2, 4.0, st.session_state["tapered_area_ratio"], step=0.05,
+        "Area Ratio (Outlet / Inlet)", 0.2, 4.0, st.session_state["tapered_area_ratio"], step=0.05,
         key="_tapered_area_ratio_widget", disabled=not enabled,
-        help="> 1 diverges, < 1 converges, = 1 is the constant-area channel above.",
+        help="A ratio greater than one diverges the channel, less than one converges it, and exactly one "
+             "reproduces the constant-area channel above.",
     )
     st.session_state["tapered_area_ratio"] = area_ratio
 
@@ -380,22 +381,23 @@ def tapered_channel_dialog() -> None:
     else:
         color = "red"
     st.metric(
-        "Divergence half-angle", f":{color}[{half_angle:+.2f}°]",
-        help="Ohm's law's dropped v_py/v_pz terms (Derivation.md) are only a "
-             "defensible approximation for GENTLE divergence. Green: comfortably "
-             f"under the {max_half_angle_deg:g}° guard. Orange: approaching it. "
-             "Red: past it -- the solver will warn (or, in strict mode, refuse to run).",
+        "Divergence Half-Angle", f":{color}[{half_angle:+.2f}°]",
+        help="Ohm's law's dropped v_py/v_pz terms (Derivation.md) are a defensible approximation only for gentle "
+             f"divergence. Green indicates a comfortable margin under the {max_half_angle_deg:g}-degree guard; "
+             "orange indicates the angle is approaching it; red indicates the angle has passed it, in which case "
+             "the solver issues a warning (or, in strict mode, refuses to run).",
     )
     if not enabled:
-        st.caption("Currently disabled -- the channel above uses a constant area.")
+        st.caption("Tapering is currently disabled. The channel above uses a constant cross-sectional area.")
 
     if enabled:
         st.divider()
         st.caption(
-            "Live preview, at the current sidebar inlet conditions -- constant area (above) vs. this taper. A "
-            "taper's LOCAL steepness (dA/dx) is the ratio spread over the WHOLE channel length, so the same ratio "
-            "does much less over the short distance where the interaction (or choking, for a supersonic inlet) "
-            "actually happens if the channel is long compared to that distance -- this is where that shows up."
+            "A live preview at the current sidebar inlet conditions, comparing the constant-area channel above "
+            "with this taper. A taper's local steepness (dA/dx) is the area ratio spread over the whole channel "
+            "length, so the same ratio does much less over the short distance where the interaction, or choking "
+            "for a supersonic inlet, actually happens if the channel is long compared to that distance. The "
+            "table below shows where that effect appears."
         )
         # Two full marches, right here, rather than only reporting the taper's geometry: the
         # geometry alone (half-angle, area ratio) doesn't say whether it's steep enough to matter
@@ -413,24 +415,24 @@ def tapered_channel_dialog() -> None:
         )
         preview_rows = [
             ("Choked?", str(flat_channel.choked), str(tapered_channel.choked)),
-            ("Distance traveled [mm]", f"{flat_out['x'][-1] * 1000:.3f}", f"{tapered_out['x'][-1] * 1000:.3f}"),
-            ("Load power P_L [W]", f"{flat_perf['PL']:.1f}", f"{tapered_perf['PL']:.1f}"),
+            ("Distance Traveled [mm]", f"{flat_out['x'][-1] * 1000:.3f}", f"{tapered_out['x'][-1] * 1000:.3f}"),
+            ("Load Power (P_L) [W]", f"{flat_perf['PL']:.1f}", f"{tapered_perf['PL']:.1f}"),
             (
-                "Enthalpy extraction [%]", f"{flat_perf['enthalpy_extraction_ratio'] * 100:.3f}",
+                "Enthalpy Extraction [%]", f"{flat_perf['enthalpy_extraction_ratio'] * 100:.3f}",
                 f"{tapered_perf['enthalpy_extraction_ratio'] * 100:.3f}",
             ),
         ]
         st.dataframe(
-            pd.DataFrame(preview_rows, columns=["", "Constant area", f"{taper.half_angle_deg:+.2f}° taper"]),
+            pd.DataFrame(preview_rows, columns=["", "Constant Area", f"{taper.half_angle_deg:+.2f}° Taper"]),
             hide_index=True, width="stretch",
         )
         flat_x_last = flat_out["x"][-1]
         distance_change = abs(tapered_out["x"][-1] - flat_x_last) / flat_x_last if flat_x_last > 0 else 0.0
         if distance_change < 0.02:
             st.caption(
-                f"⚠️ Distance traveled changed by only {distance_change * 100:.1f}% -- with the configured channel "
+                f"⚠️ Distance traveled changed by only {distance_change * 100:.1f}%. With the configured channel "
                 f"length ({length:.3g} m), this taper's local steepness (half-angle {taper.half_angle_deg:+.2f}°) "
-                "is too gentle to matter over the short distance where the flow actually chokes/interacts. A "
+                "is too gentle to matter over the short distance where the flow actually chokes or interacts. A "
                 "shorter channel length, or a larger area ratio, concentrates the same taper over less distance."
             )
 
@@ -528,7 +530,7 @@ def profile_density(out: dict, seed_number_density) -> go.Figure:
         [("n_s (seed)", seed_number_density, COLOR_BLUE, "solid"), ("n_e (electrons)", out["ne"], COLOR_ORANGE, "dash")],
         [("n_e/n_s (ionization fraction)", ionization_fraction, COLOR_GREEN, "dot")],
         "Seed vs. Electron Density (how much of the seed is ionized)",
-        "Number density [m⁻³]", "Ionization fraction",
+        "Number Density [m⁻³]", "Ionization Fraction",
         left_log=True, right_range=(0.0, 1.05),
     )
     return fig
@@ -537,7 +539,7 @@ def profile_density(out: dict, seed_number_density) -> go.Figure:
 def profile_power(out: dict) -> go.Figure:
     return plot_single_axis(
         out["x"], [("S_Ω (ohmic)", out["S_ohm"], COLOR_BLUE, "solid"), ("S_L (load)", out["S_load"], COLOR_ORANGE, "dash")],
-        "Ohmic Heating vs Load Power", "Power density [W/m³]",
+        "Ohmic Heating vs. Load Power", "Power Density [W/m³]",
     )
 
 
@@ -585,7 +587,7 @@ def compare_temperature(configs: list[dict]) -> go.Figure:
         series.append((f"{cfg['label']}: T_e", cfg["out"]["Te"], c, "dash"))
     return plot_single_axis(
         configs[0]["out"]["x"], series,
-        "Electron vs. Primary Gas Temperature (solid = T_p, dashed = T_e)", "Temperature [K]",
+        "Electron vs. Primary Gas Temperature (Solid = T_p, Dashed = T_e)", "Temperature [K]",
     )
 
 
@@ -593,7 +595,7 @@ def compare_primary_gas(configs: list[dict]) -> go.Figure:
     left = [(f"{cfg['label']}: n_p", cfg["out"]["np"], _config_color(i), "solid") for i, cfg in enumerate(configs)]
     right = [(f"{cfg['label']}: v_p", cfg["out"]["u"], _config_color(i), "dash") for i, cfg in enumerate(configs)]
     return plot_twin_axis(
-        configs[0]["out"]["x"], left, right, "Primary Gas (solid = n_p, dashed = v_p)", "n_p [m⁻³]", "v_p [m/s]",
+        configs[0]["out"]["x"], left, right, "Primary Gas (Solid = n_p, Dashed = v_p)", "n_p [m⁻³]", "v_p [m/s]",
     )
 
 
@@ -607,8 +609,8 @@ def compare_density(configs: list[dict]) -> go.Figure:
         right.append((f"{cfg['label']}: n_e/n_s", ionization_fraction, c, "dot"))
     return plot_twin_axis(
         configs[0]["out"]["x"], left, right,
-        "Seed/Electron Density (solid/dashed), Ionization Fraction (dotted)",
-        "Number density [m⁻³]", "Ionization fraction",
+        "Seed/Electron Density (Solid/Dashed), Ionization Fraction (Dotted)",
+        "Number Density [m⁻³]", "Ionization Fraction",
         left_log=True, right_range=(0.0, 1.05),
     )
 
@@ -620,7 +622,7 @@ def compare_power(configs: list[dict]) -> go.Figure:
         series.append((f"{cfg['label']}: S_Ω", cfg["out"]["S_ohm"], c, "solid"))
         series.append((f"{cfg['label']}: S_L", cfg["out"]["S_load"], c, "dash"))
     return plot_single_axis(
-        configs[0]["out"]["x"], series, "Ohmic Heating (solid) vs Load Power (dashed)", "Power density [W/m³]",
+        configs[0]["out"]["x"], series, "Ohmic Heating (Solid) vs. Load Power (Dashed)", "Power Density [W/m³]",
     )
 
 
@@ -635,10 +637,10 @@ def compare_hall_parameter(configs: list[dict]) -> go.Figure:
 
 
 COMPARE_PLOTS = {
-    "Temperature (Tp, Te)": compare_temperature,
-    "Primary Gas (np, vp)": compare_primary_gas,
-    "Seed/Electron Density + Ionization": compare_density,
-    "Ohmic vs Load Power": compare_power,
+    "Temperature (T_p, T_e)": compare_temperature,
+    "Primary Gas (n_p, v_p)": compare_primary_gas,
+    "Seed/Electron Density and Ionization Fraction": compare_density,
+    "Ohmic vs. Load Power": compare_power,
     "Pressure": compare_pressure,
     "Hall Parameter": compare_hall_parameter,
 }
@@ -657,7 +659,7 @@ hall_solver, gas_type = build_default_hall_solver()
 ideal_gas = IdealGas(gas_type=gas_type)
 
 st.title("1-D Linear Hall MHD Generator")
-st.caption(f"{gas_type.name} primary gas, caesium-seeded -- see Derivation.md")
+st.caption(f"{gas_type.name} primary gas with caesium seeding. See Derivation.md for the governing equations.")
 
 with st.sidebar:
     st.header("Geometry")
@@ -675,9 +677,9 @@ with st.sidebar:
     st.session_state.setdefault("tapered_channel_enabled", False)
     st.session_state.setdefault("tapered_area_ratio", 1.0)
     taper_button_label = (
-        f"🔻 Tapered channel: ON ({st.session_state['tapered_area_ratio']:.2f}x)"
+        f"Tapered Channel: On ({st.session_state['tapered_area_ratio']:.2f}x)"
         if st.session_state["tapered_channel_enabled"]
-        else "Tapered channel..."
+        else "Tapered Channel..."
     )
     if st.button(taper_button_label, width="stretch"):
         tapered_channel_dialog()
@@ -692,11 +694,12 @@ with st.sidebar:
     label, lo, hi, default, step = UI_PARAMS["load_resistivity"]
     bounded_slider("load_resistivity", label, lo, hi, default, step)
 
-    st.header("💾 Save / Load")
+    st.header("Save / Load")
     name_col, save_col = st.columns([3, 1], vertical_alignment="bottom")
     with name_col:
         save_name = st.text_input(
-            "Name", key="save_config_name", placeholder="optional, blank -> timestamp", label_visibility="collapsed",
+            "Name", key="save_config_name", placeholder="Optional; leave blank for a timestamped name",
+            label_visibility="collapsed",
         )
     with save_col:
         if st.button("Save", key="save_config_button", width="stretch"):
@@ -717,7 +720,7 @@ with st.sidebar:
                 st.session_state["pending_apply"] = pending_apply_for_values(loaded_values)
                 st.rerun()
     else:
-        st.caption(f"No saved configs yet -- go in `{SAVE_DIR.relative_to(SAVE_DIR.parent.parent)}/`.")
+        st.caption(f"No saved configurations yet. New files are stored in `{SAVE_DIR.relative_to(SAVE_DIR.parent.parent)}/`.")
 
 ui_values = {key: st.session_state[key] for key in UI_PARAMS}
 ui_values["num_slices"] = st.session_state["num_slices"]
@@ -740,24 +743,26 @@ else:
 
 st.subheader("Performance")
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Load power P_L", f"{perf['PL']:.1f} W")
-m2.metric("Electrical efficiency", f"{perf['eta_electrical'] * 100:.1f} %")
-m3.metric("Isentropic efficiency", f"{perf['eta_isentropic'] * 100:.1f} %")
-m4.metric("Enthalpy extraction ratio", f"{perf['enthalpy_extraction_ratio'] * 100:.1f} %")
+m1.metric("Load Power (P_L)", f"{perf['PL']:.1f} W")
+m2.metric("Electrical Efficiency", f"{perf['eta_electrical'] * 100:.1f} %")
+m3.metric("Isentropic Efficiency", f"{perf['eta_isentropic'] * 100:.1f} %")
+m4.metric("Enthalpy Extraction Ratio", f"{perf['enthalpy_extraction_ratio'] * 100:.1f} %")
 m5.metric(
-    "Min stability margin", f":{margin_color}[{min_stability_margin:.3g}]",
-    help="Velikhov-ionisation marginal-stability ratio β_crit/β (exact criterion, eq. 5.13), minimum along the "
-         "whole channel -- see the Profiles tab's own plot for the full profile, and the Stability tab to explore "
-         "it away from this exact operating point. Red: ≤1, unstable somewhere in the channel. Orange: 1-50, "
-         "stable but with little margin. Green: >50, comfortably stable.",
+    "Minimum Stability Margin", f":{margin_color}[{min_stability_margin:.3g}]",
+    help="The Velikhov-ionization stability margin, β_crit/β (exact criterion, eq. 5.13), analogous to a "
+         "control-theory gain margin: it is a ratio, not a difference, and stability requires it to exceed one. "
+         "This is its minimum along the whole channel. See the Profiles tab for the full profile, and the "
+         "Stability tab to explore it away from this operating point. Red indicates a value at or below one "
+         "(unstable somewhere in the channel); orange indicates a value between one and fifty (stable, with "
+         "little margin); green indicates a value above fifty (comfortably stable).",
 )
 
 if channel.choked:
     st.warning(
-        f"⚠️ Flow reached M={hall_solver.max_mach_number:g} (choked, Rayleigh-flow limit) at "
-        f"x={channel.x[-1]:.4f} m -- {len(channel)} of the requested {ui_values['num_slices']} slices were "
-        "computed. Plots and metrics below only cover the channel up to that point. Reduce the magnetic field, "
-        "load resistivity, or seed fraction to push the choke point further down the channel."
+        f"Flow reached M = {hall_solver.max_mach_number:g} (choked, Rayleigh-flow limit) at "
+        f"x = {channel.x[-1]:.4f} m. Only {len(channel)} of the requested {ui_values['num_slices']} slices were "
+        "computed; plots and metrics below cover only the channel up to that point. Reducing the magnetic field, "
+        "load resistivity, or seed fraction pushes the choke point further down the channel."
     )
 
 # st.tabs() looked like the natural fit here, but its active-tab selection is purely
@@ -773,13 +778,13 @@ if channel.choked:
 # one option always selected, matching st.tabs()' own behavior -- and, unlike st.tabs()
 # (which runs every tab's body on every rerun), only the selected section's body runs
 # below, so an unrelated tab's content no longer computes at all while hidden.
-TAB_LABELS = ["📈 Profiles", "🔎 Inlet Summary", "🛡️ Stability", "🎯 Optimize", "🧬 Multi-Optimize", "🆚 Compare"]
+TAB_LABELS = ["Profiles", "Inlet Summary", "Stability", "Optimize", "Multi-Optimize", "Compare"]
 active_tab = st.segmented_control(
     "Main view", TAB_LABELS, default=TAB_LABELS[0], required=True,
     key="app_main_tab", label_visibility="collapsed",
 )
 
-if active_tab == "📈 Profiles":
+if active_tab == "Profiles":
     col1, col2 = st.columns(2)
 
     with col1:
@@ -796,10 +801,10 @@ if active_tab == "📈 Profiles":
         if "area" in out:  # only present for a tapered channel (see the Geometry sidebar's dialog)
             st.plotly_chart(profile_channel_area(out), width="stretch", key="plot_channel_area")
 
-if active_tab == "🛡️ Stability":
+if active_tab == "Stability":
     stability_tab.render(ui_values)
 
-if active_tab == "🔎 Inlet Summary":
+if active_tab == "Inlet Summary":
     st.markdown("Everything the solver computes for the very first slice (x = 0), where the axial march starts.")
 
     mach0 = float(ideal_gas.get_mach_number(inlet.flow_speed, inlet.gas_temperature))
@@ -814,95 +819,95 @@ if active_tab == "🔎 Inlet Summary":
     hall_current_ratio0 = abs(inlet.current_density[1] / inlet.current_density[0])
 
     rows = [
-        ("Primary gas temperature  T_p", f"{inlet.gas_temperature:,.1f}", "K"),
-        ("Primary gas pressure  p", f"{inlet.gas_pressure:,.1f}", "Pa"),
-        ("Primary gas number density  n_p", f"{inlet.gas_number_density:.3e}", "m^-3"),
-        ("Flow speed  u", f"{inlet.flow_speed:,.2f}", "m/s"),
-        ("Mach number  M", f"{mach0:.3f}", "-"),
-        ("Electron temperature  T_e", f"{inlet.electron_temperature:,.1f}", "K"),
-        ("Electron/gas temperature ratio  T_e/T_p", f"{inlet.electron_temperature / inlet.gas_temperature:.3f}", "-"),
-        ("Seed number density  n_s", f"{ns0:.3e}", "m^-3"),
-        ("Electron number density  n_e", f"{inlet.electron_number_density:.3e}", "m^-3"),
-        ("Ionization fraction  n_e/n_s", f"{ionization_fraction0:.4f}", "-"),
-        ("Momentum-transfer frequency  ν_M", f"{inlet.momentum_transfer_frequency:.3e}", "1/s"),
-        ("Energy-transfer frequency  ν_E", f"{inlet.energy_transfer_frequency:.3e}", "1/s"),
-        ("Plasma resistivity  η", f"{inlet.resistivity:.3e}", "Ω·m"),
-        ("Plasma conductivity  σ", f"{inlet.conductivity:.3e}", "S/m"),
-        ("Hall parameter  β", f"{inlet.hall_parameter:.3f}", "-"),
-        ("Ideal channel length  L (Messerle 4.20)", f"{inlet.ideal_channel_length:.4g}", "m"),
-        ("Load ratio  Z = R_load/η", f"{Z0:.3f}", "-"),
-        ("Power-matched load ratio  Z* = β²+1", f"{Z_matched0:.3f}", "-"),
-        ("Current density  J_x (Faraday)", f"{inlet.current_density[0]:,.2f}", "A/m²"),
-        ("Current density  J_y (Hall)", f"{inlet.current_density[1]:,.2f}", "A/m²"),
-        ("Hall/Faraday current ratio  |J_y/J_x|", f"{hall_current_ratio0:.3f}", "-"),
-        ("Axial electric field  E_x", f"{inlet.axial_electric_field:,.2f}", "V/m"),
-        ("Ohmic power density  S_Ω", f"{inlet.ohmic_power_density:,.2f}", "W/m³"),
-        ("Load power density  S_L", f"{inlet.load_power_density:,.2f}", "W/m³"),
+        ("Primary Gas Temperature (T_p)", f"{inlet.gas_temperature:,.1f}", "K"),
+        ("Primary Gas Pressure (p)", f"{inlet.gas_pressure:,.1f}", "Pa"),
+        ("Primary Gas Number Density (n_p)", f"{inlet.gas_number_density:.3e}", "m^-3"),
+        ("Flow Speed (u)", f"{inlet.flow_speed:,.2f}", "m/s"),
+        ("Mach Number (M)", f"{mach0:.3f}", "-"),
+        ("Electron Temperature (T_e)", f"{inlet.electron_temperature:,.1f}", "K"),
+        ("Electron-to-Gas Temperature Ratio (T_e/T_p)", f"{inlet.electron_temperature / inlet.gas_temperature:.3f}", "-"),
+        ("Seed Number Density (n_s)", f"{ns0:.3e}", "m^-3"),
+        ("Electron Number Density (n_e)", f"{inlet.electron_number_density:.3e}", "m^-3"),
+        ("Ionization Fraction (n_e/n_s)", f"{ionization_fraction0:.4f}", "-"),
+        ("Momentum-Transfer Frequency (ν_M)", f"{inlet.momentum_transfer_frequency:.3e}", "1/s"),
+        ("Energy-Transfer Frequency (ν_E)", f"{inlet.energy_transfer_frequency:.3e}", "1/s"),
+        ("Plasma Resistivity (η)", f"{inlet.resistivity:.3e}", "Ω·m"),
+        ("Plasma Conductivity (σ)", f"{inlet.conductivity:.3e}", "S/m"),
+        ("Hall Parameter (β)", f"{inlet.hall_parameter:.3f}", "-"),
+        ("Ideal Channel Length (L, Messerle 4.20)", f"{inlet.ideal_channel_length:.4g}", "m"),
+        ("Load Ratio (Z = R_load/η)", f"{Z0:.3f}", "-"),
+        ("Power-Matched Load Ratio (Z* = β² + 1)", f"{Z_matched0:.3f}", "-"),
+        ("Current Density, Faraday (J_x)", f"{inlet.current_density[0]:,.2f}", "A/m²"),
+        ("Current Density, Hall (J_y)", f"{inlet.current_density[1]:,.2f}", "A/m²"),
+        ("Hall-to-Faraday Current Ratio (|J_y/J_x|)", f"{hall_current_ratio0:.3f}", "-"),
+        ("Axial Electric Field (E_x)", f"{inlet.axial_electric_field:,.2f}", "V/m"),
+        ("Ohmic Power Density (S_Ω)", f"{inlet.ohmic_power_density:,.2f}", "W/m³"),
+        ("Load Power Density (S_L)", f"{inlet.load_power_density:,.2f}", "W/m³"),
     ]
     st.dataframe(
         pd.DataFrame(rows, columns=["Quantity", "Value", "Units"]),
         hide_index=True, width="stretch",
     )
 
-    st.markdown("#### Why the numbers come out this way")
+    st.markdown("#### Physical Interpretation")
 
     mach_note = regime_note(
         mach0, 0.95, 1.05,
-        f"**Subsonic inlet** (M = {mach0:.2f} < 1): the primary gas can still respond to downstream pressure changes.",
-        f"**Transonic inlet** (M = {mach0:.2f} ≈ 1): right at the sonic boundary.",
-        f"**Supersonic inlet** (M = {mach0:.2f} > 1): downstream conditions can't propagate back upstream.",
+        f"**Subsonic inlet** (M = {mach0:.2f} < 1). The primary gas can still respond to downstream pressure changes.",
+        f"**Transonic inlet** (M = {mach0:.2f} ≈ 1). This is at the sonic boundary.",
+        f"**Supersonic inlet** (M = {mach0:.2f} > 1). Downstream conditions cannot propagate back upstream.",
     )
     beta_note = regime_note(
         inlet.hall_parameter, 0.3, 3.0,
-        f"**Collision-dominated** (β = {inlet.hall_parameter:.2f} ≪ 1): electrons collide with neutrals before they can "
-        f"gyrate, so current flows almost straight to the load (J_x ≫ J_y).",
-        f"**Intermediate regime** (β = {inlet.hall_parameter:.2f}): Faraday and Hall currents are comparable.",
-        f"**Hall-dominated** (β = {inlet.hall_parameter:.2f} ≫ 1): electrons gyrate many times between collisions, "
-        f"deflecting most of the current into the transverse (Hall, J_y) direction instead of to the load (J_x/J_y = "
-        f"{1 / hall_current_ratio0:.2f}).",
+        f"**Collision-dominated regime** (β = {inlet.hall_parameter:.2f} ≪ 1). Electrons collide with neutrals "
+        f"before they can gyrate, so current flows almost straight to the load (J_x ≫ J_y).",
+        f"**Intermediate regime** (β = {inlet.hall_parameter:.2f}). The Faraday and Hall currents are comparable.",
+        f"**Hall-dominated regime** (β = {inlet.hall_parameter:.2f} ≫ 1). Electrons gyrate many times between "
+        f"collisions, deflecting most of the current into the transverse (Hall, J_y) direction rather than to the "
+        f"load (J_x/J_y = {1 / hall_current_ratio0:.2f}).",
     )
     z_ratio = Z0 / Z_matched0
     z_note = regime_note(
         z_ratio, 0.7, 1.4,
-        f"**Under-loaded** (Z = {Z0:.2f} vs. the locally power-matched Z* = β²+1 = {Z_matched0:.2f}): the load "
-        f"resistivity is too low for this β -- raising it should increase S_L (try the Optimize tab).",
-        f"**Near the local power-matched point** (Z = {Z0:.2f} ≈ Z* = {Z_matched0:.2f}): for fixed β and η, S_L is "
-        f"maximized when Z = β²+1 (from S_L ∝ Z/(β²+1+Z)²). Note η and T_e also shift with Z, so this is a rule of "
-        f"thumb, not the exact global optimum -- that's what the Optimize tab solves for.",
-        f"**Over-loaded** (Z = {Z0:.2f} vs. the locally power-matched Z* = β²+1 = {Z_matched0:.2f}): close to "
-        f"open-circuit -- lowering the load resistivity should increase S_L (try the Optimize tab).",
+        f"**Under-loaded** (Z = {Z0:.2f} versus the locally power-matched Z* = β² + 1 = {Z_matched0:.2f}). The "
+        f"load resistivity is too low for this β; raising it should increase S_L (see the Optimize tab).",
+        f"**Near the local power-matched point** (Z = {Z0:.2f} ≈ Z* = {Z_matched0:.2f}). For fixed β and η, S_L "
+        f"is maximized when Z = β² + 1 (from S_L ∝ Z/(β² + 1 + Z)²). Note that η and T_e also shift with Z, so "
+        f"this is a rule of thumb rather than the exact global optimum; the Optimize tab solves for that.",
+        f"**Over-loaded** (Z = {Z0:.2f} versus the locally power-matched Z* = β² + 1 = {Z_matched0:.2f}). This is "
+        f"close to open-circuit; lowering the load resistivity should increase S_L (see the Optimize tab).",
     )
     ionization_note = regime_note(
         ionization_fraction0, 0.01, 0.5,
-        f"Only **{ionization_fraction0:.2%}** of the seed is ionized -- Saha equilibrium at T_e = "
+        f"Only **{ionization_fraction0:.2%}** of the seed is ionized. Saha equilibrium at T_e = "
         f"{inlet.electron_temperature:,.0f} K is still far from fully ionizing the caesium seed.",
-        f"**{ionization_fraction0:.2%}** of the seed is ionized -- a moderately ionized seed plasma.",
-        f"**{ionization_fraction0:.2%}** of the seed is ionized -- the caesium seed is nearly fully ionized at this "
-        f"electron temperature, so n_e is limited mainly by n_s, not by the Saha exponential anymore.",
+        f"**{ionization_fraction0:.2%}** of the seed is ionized, giving a moderately ionized seed plasma.",
+        f"**{ionization_fraction0:.2%}** of the seed is ionized. The caesium seed is nearly fully ionized at this "
+        f"electron temperature, so n_e is now limited mainly by n_s rather than by the Saha exponential.",
     )
     delta_T_note = (
-        f"Electrons run **{delta_T0:.1%} hotter** than the primary gas (T_e/T_p = {inlet.electron_temperature / inlet.gas_temperature:.2f}) "
-        f"because Ohmic heating (S_Ω ∝ β⁴) outpaces how fast elastic collisions (ν_E) can relax that energy back into "
-        f"the neutral gas -- this is exactly the ΔT term in `HallSolver.solve_equilibrium`, and it grows with both β and "
-        f"the Mach number."
+        f"Electrons run **{delta_T0:.1%} hotter** than the primary gas (T_e/T_p = "
+        f"{inlet.electron_temperature / inlet.gas_temperature:.2f}) because Ohmic heating (S_Ω ∝ β⁴) outpaces "
+        f"how fast elastic collisions (ν_E) can relax that energy back into the neutral gas. This is precisely "
+        f"the ΔT term in `HallSolver.solve_equilibrium`, and it grows with both β and the Mach number."
     )
     channel_length_ratio = params["length"] / inlet.ideal_channel_length
     channel_length_note = regime_note(
         channel_length_ratio, 0.5, 2.0,
-        f"**Shorter than Messerle's estimate** (configured length {params['length']:.3g} m vs. L ≈ "
-        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}): the B-field/flow "
+        f"**Shorter than Messerle's estimate** (configured length {params['length']:.3g} m versus L ≈ "
+        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}). The B-field/flow "
         f"interaction (Sec. 4.3) may not have room to fully develop before the outlet.",
-        f"**Close to Messerle's estimate** (configured length {params['length']:.3g} m vs. L ≈ "
+        f"**Close to Messerle's estimate** (configured length {params['length']:.3g} m versus L ≈ "
         f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}).",
-        f"**Longer than Messerle's estimate** (configured length {params['length']:.3g} m vs. L ≈ "
-        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}): well past the "
-        f"interaction length -- note L itself grows fast down the channel too, since u, σ, and p all evolve.",
+        f"**Longer than Messerle's estimate** (configured length {params['length']:.3g} m versus L ≈ "
+        f"{inlet.ideal_channel_length:.3g} m at the inlet, ratio {channel_length_ratio:.2f}), well past the "
+        f"interaction length. Note that L itself grows quickly down the channel too, since u, σ, and p all evolve.",
     )
 
     for note in (mach_note, beta_note, z_note, ionization_note, delta_T_note, channel_length_note):
         st.markdown(f"- {note}")
 
-if active_tab == "🎯 Optimize":
+if active_tab == "Optimize":
     st.caption(
         "Sweeps one parameter within the bounds below to maximize the chosen objective, holding everything else at "
         "its current slider value."
@@ -910,13 +915,13 @@ if active_tab == "🎯 Optimize":
 
     oc1, oc2 = st.columns([1, 1])
     with oc1:
-        target_key = st.selectbox("Parameter to optimize", list(UI_PARAMS), format_func=lambda k: UI_PARAMS[k][0])
+        target_key = st.selectbox("Parameter to Optimize", list(UI_PARAMS), format_func=lambda k: UI_PARAMS[k][0])
     with oc2:
-        objective_name = st.selectbox("Objective to maximize", list(OBJECTIVES))
+        objective_name = st.selectbox("Objective to Maximize", list(OBJECTIVES))
 
     _, default_lo, default_hi, _, target_step = UI_PARAMS[target_key]
     bound_lo, bound_hi = st.slider(
-        f"Search bounds for {UI_PARAMS[target_key][0]}",
+        f"Search Bounds for {UI_PARAMS[target_key][0]}",
         min_value=default_lo, max_value=default_hi, value=(default_lo, default_hi),
         step=target_step, key=f"bound_range_{target_key}",
     )
@@ -928,9 +933,9 @@ if active_tab == "🎯 Optimize":
     )
     run_col, apply_col = st.columns([1, 1])
     with run_col:
-        run_clicked = st.button("Run optimization", type="primary", width="stretch")
+        run_clicked = st.button("Run Optimization", type="primary", width="stretch")
     with apply_col:
-        apply_clicked = st.button("Apply optimal value to slider", disabled=not has_result, width="stretch")
+        apply_clicked = st.button("Apply Optimal Value to Slider", disabled=not has_result, width="stretch")
 
     if run_clicked:
         if bound_lo >= bound_hi:
@@ -962,7 +967,7 @@ if active_tab == "🎯 Optimize":
         res = st.session_state["last_optimization"]
         if res["target_key"] == target_key and res["objective_name"] == objective_name:
             label = UI_PARAMS[target_key][0]
-            st.success(f"Best {label} = {res['value']:.5g}  →  {res['objective_name']} = {res['objective']:.5g}")
+            st.success(f"Best {label} = {res['value']:.5g}, yielding {res['objective_name']} = {res['objective']:.5g}.")
 
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=res["sweep_x"], y=res["sweep_y"], mode="lines", name=objective_name,
@@ -974,27 +979,27 @@ if active_tab == "🎯 Optimize":
                                margin=dict(l=60, r=60, t=30, b=40), hovermode="x unified")
             st.plotly_chart(fig, width="stretch", key="plot_single_optimize_sweep")
 
-if active_tab == "🧬 Multi-Optimize":
+if active_tab == "Multi-Optimize":
     st.caption(
         "Optimizes seed fraction, load resistivity, inlet pressure, inlet speed, and inlet gas temperature "
-        "**together** -- channel geometry and magnetic field stay fixed at their current slider values, since "
-        "those are fixed by the use case. Uncheck any parameter below to hold IT fixed too (at its current "
-        "slider value) instead of searching it. This uses a derivative-free global optimizer (the choke limit "
-        "makes the objective landscape non-smooth) and takes noticeably longer than the single-parameter tab."
+        "together. Channel geometry and magnetic field remain fixed at their current slider values, since those "
+        "are fixed by the use case; uncheck any parameter below to hold it fixed as well, at its current slider "
+        "value, instead of searching it. This uses a derivative-free global optimizer, since the choke limit "
+        "makes the objective landscape non-smooth, and so takes noticeably longer than the single-parameter tab."
     )
 
     oc1, oc2 = st.columns([2, 1])
     with oc1:
-        multi_objective_name = st.selectbox("Objective to maximize", list(OBJECTIVES), key="multi_objective")
+        multi_objective_name = st.selectbox("Objective to Maximize", list(OBJECTIVES), key="multi_objective")
     with oc2:
-        thoroughness = st.selectbox("Search thoroughness", list(SEARCH_THOROUGHNESS_PRESETS), index=1, key="multi_thoroughness")
+        thoroughness = st.selectbox("Search Thoroughness", list(SEARCH_THOROUGHNESS_PRESETS), index=1, key="multi_thoroughness")
     maxiter = SEARCH_THOROUGHNESS_PRESETS[thoroughness]["maxiter"]
     popsize = SEARCH_THOROUGHNESS_PRESETS[thoroughness]["popsize"]
 
-    st.markdown("**Search bounds**")
+    st.markdown("**Search Bounds**")
     st.caption(
-        "Note: the seed fraction bound is in log10 units, matching its sidebar slider (e.g. -3 → 0.001). "
-        "Uncheck a parameter to hold it fixed at its current sidebar value instead of searching it."
+        "The seed fraction bound is in log10 units, matching its sidebar slider (for example, -3 corresponds to "
+        "0.001). Uncheck a parameter to hold it fixed at its current sidebar value instead of searching over it."
     )
     multi_bounds: dict[str, tuple[float, float]] = {}
     multi_enabled: dict[str, bool] = {}
@@ -1030,7 +1035,7 @@ if active_tab == "🧬 Multi-Optimize":
 
         # Time evaluations at a few random points drawn from the actual search bounds (not just
         # the current slider point, which is often mid-choke and unrepresentatively fast/slow) to
-        # give an upfront estimate. Cheap (a handful of extra marches) -- reruns on every change.
+        # give an upfront estimate. Cheap (a handful of extra marches), reruns on every change.
         _rng = np.random.default_rng(0)
         _sample_times = []
         for _ in range(5):
@@ -1058,11 +1063,11 @@ if active_tab == "🧬 Multi-Optimize":
     run_col, apply_col = st.columns([1, 1])
     with run_col:
         run_multi_clicked = st.button(
-            "Run multi-parameter optimization", type="primary", width="stretch", disabled=ndim == 0,
+            "Run Multi-Parameter Optimization", type="primary", width="stretch", disabled=ndim == 0,
         )
     with apply_col:
         apply_multi_clicked = st.button(
-            "Apply all optimal values to sliders", disabled=not has_multi_result, width="stretch",
+            "Apply All Optimal Values to Sliders", disabled=not has_multi_result, width="stretch",
         )
 
     if run_multi_clicked:
@@ -1089,8 +1094,8 @@ if active_tab == "🧬 Multi-Optimize":
                     fraction,
                     text=(
                         f"Generation {intermediate_result.nit}/{maxiter} "
-                        f"({intermediate_result.nfev:,} evaluations) -- best {multi_objective_name} so far: "
-                        f"{-intermediate_result.fun:.5g} -- {elapsed:.1f}s elapsed, ~{eta:.1f}s remaining"
+                        f"({intermediate_result.nfev:,} evaluations), best {multi_objective_name} so far: "
+                        f"{-intermediate_result.fun:.5g} ({elapsed:.1f}s elapsed, approximately {eta:.1f}s remaining)"
                     ),
                 )
 
@@ -1125,11 +1130,11 @@ if active_tab == "🧬 Multi-Optimize":
         if res["objective_name"] == multi_objective_name:
             current_objective = OBJECTIVES[multi_objective_name](out, params, perf)
             st.success(
-                f"Best {multi_objective_name} = {res['objective']:.5g}  "
-                f"(current slider values give {current_objective:.5g})"
+                f"Best {multi_objective_name} = {res['objective']:.5g} "
+                f"(the current slider values give {current_objective:.5g})."
             )
             if res["choked"]:
-                st.caption("⚠️ The optimum found chokes before the channel outlet (see the Profiles tab warning).")
+                st.caption("⚠️ The optimum found chokes before the channel outlet. See the warning on the Profiles tab.")
 
             comparison = pd.DataFrame(
                 [
@@ -1143,28 +1148,28 @@ if active_tab == "🧬 Multi-Optimize":
             )
             st.dataframe(comparison, hide_index=True, width="stretch")
 
-if active_tab == "🆚 Compare":
+if active_tab == "Compare":
     st.caption(
-        "Compare the current configuration and/or up to three saved files side by side -- performance numbers "
-        "plus any two profile plots, all live (no need to re-run anything when you change a selection)."
+        "Compares the current configuration and up to three saved files side by side: performance numbers plus "
+        "any two profile plots, all updated live with no need to re-run anything when a selection changes."
     )
 
     saved_paths = list_saved_configs()
-    slot_options = ["None", "Current configuration"] + [p.stem for p in saved_paths]
+    slot_options = ["None", "Current Configuration"] + [p.stem for p in saved_paths]
     stem_to_path = {p.stem: p for p in saved_paths}
 
     slot_cols = st.columns(3)
     slot_choices = []
     for i, col in enumerate(slot_cols):
         with col:
-            default_index = 1 if i == 0 else 0  # slot 1 defaults to "Current configuration"
+            default_index = 1 if i == 0 else 0  # slot 1 defaults to "Current Configuration"
             slot_choices.append(st.selectbox(f"Slot {i + 1}", slot_options, index=default_index, key=f"compare_slot_{i}"))
 
     configs = []
     for choice in slot_choices:
         if choice == "None":
             continue
-        if choice == "Current configuration":
+        if choice == "Current Configuration":
             configs.append(dict(label="Current", out=out, perf=perf, channel=channel, seed_number_density=seed_number_density))
         else:
             c_values, c_name = load_config(stem_to_path[choice])
@@ -1173,7 +1178,7 @@ if active_tab == "🆚 Compare":
             configs.append(dict(label=c_name, out=c_out, perf=c_perf, channel=c_channel, seed_number_density=c_seed_number_density))
 
     if not configs:
-        st.info("Pick at least one configuration above (a slot, or a saved file) to compare.")
+        st.info("Select at least one configuration above, a slot or a saved file, to enable comparison.")
     else:
         st.markdown("**Performance**")
         perf_rows = [
@@ -1189,7 +1194,10 @@ if active_tab == "🆚 Compare":
         ]
         perf_df = pd.DataFrame(
             perf_rows,
-            columns=["Configuration", "Load Power", "Electrical Eff.", "Isentropic Eff.", "Enthalpy Extraction", "Choked?"],
+            columns=[
+                "Configuration", "Load Power", "Electrical Efficiency", "Isentropic Efficiency",
+                "Enthalpy Extraction", "Choked?",
+            ],
         )
         st.dataframe(perf_df, hide_index=True, width="stretch")
 
