@@ -34,8 +34,9 @@ import streamlit as st
 import tomli_w
 from scipy.optimize import differential_evolution, minimize_scalar
 
-from magnetohydrodynamics.analysis import summarize_performance
+from magnetohydrodynamics.analysis import summarize_performance, summarize_tapered_performance
 from magnetohydrodynamics.presets import build_default_hall_solver, default_seed_type
+from magnetohydrodynamics.solver.tapered_hall_solver import LinearTaper, TaperedHallSolver
 from magnetohydrodynamics.stability import FriedbergAsymptoticCriterion, FriedbergCriterion
 from magnetohydrodynamics.thermophysics.ideal_gas import IdealGas
 
@@ -108,8 +109,24 @@ MULTI_OPTIMIZABLE_KEYS = [
     "inlet_gas_temperature", "inlet_pressure_kpa", "inlet_speed", "seed_fraction_log10", "load_resistivity",
 ]
 
-# Everything a "configuration" is: the 8 UI_PARAMS values plus the slice count.
-CONFIG_KEYS = list(UI_PARAMS) + ["num_slices"]
+# Everything a "configuration" is: the 8 UI_PARAMS values, the slice count, and the
+# tapered-channel setting (see the Geometry sidebar section's dialog) -- CONFIG_KEYS
+# grew by the last two after saved configs already existed, so _config_default below
+# exists specifically to fill them in when loading an older file that predates them.
+CONFIG_KEYS = [*UI_PARAMS, "num_slices", "tapered_channel_enabled", "tapered_area_ratio"]
+CONFIG_EXTRA_DEFAULTS = {"tapered_channel_enabled": False, "tapered_area_ratio": 1.0}
+
+
+def _config_default(key: str):
+    """The value a CONFIG_KEYS entry defaults to when a saved config predates it --
+    UI_PARAMS' own tuple for keys registered there, NUM_SLICES_PARAMS for the slice
+    count, CONFIG_EXTRA_DEFAULTS for everything else CONFIG_KEYS has grown to include."""
+    if key in UI_PARAMS:
+        return UI_PARAMS[key][3]
+    if key == "num_slices":
+        return NUM_SLICES_PARAMS[3]
+    return CONFIG_EXTRA_DEFAULTS[key]
+
 
 SAVE_DIR = Path(__file__).resolve().parent / "saved_configs"
 SAVE_DIR.mkdir(exist_ok=True)
@@ -149,10 +166,17 @@ def save_config(values: dict, name: str) -> Path:
 
 
 def load_config(path: Path) -> tuple[dict, str]:
-    """Returns (values, display_name)."""
+    """Returns (values, display_name). Fills in any CONFIG_KEYS entry missing from the
+    file with today's default (rather than leaving it out) -- a config saved before
+    CONFIG_KEYS grew a new key (e.g. the tapered-channel setting) should load as if
+    that setting were at its default, not silently keep whatever value happens to
+    currently be in session_state from an unrelated prior action."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    return data["values"], data.get("name", path.stem)
+    values = data["values"]
+    for key in CONFIG_KEYS:
+        values.setdefault(key, _config_default(key))
+    return values, data.get("name", path.stem)
 
 
 def pending_apply_for_values(values: dict) -> dict:
@@ -215,15 +239,39 @@ def build_march_params(ui: dict) -> dict:
 
 
 def solve(hall_solver, gas_type, ui: dict):
+    """Marches the channel and summarizes performance -- constant-area
+    (HallSolver.march) by default, or a linearly-tapered channel
+    (TaperedHallSolver.march) when `ui["tapered_channel_enabled"]` is set (see the
+    "Tapered channel..." dialog in the Geometry sidebar section). `.get(...)` with a
+    default rather than a bare `ui[...]` lookup, since `ui` can be a saved-config dict
+    (Compare tab) that predates this feature and has neither key."""
     params = build_march_params(ui)
-    channel = hall_solver.march(**params)
-    out = channel.to_dict()
-    perf = summarize_performance(
-        out, A=params["area"],
-        cp=gas_type.molar_heat_capacity,
-        m_p=gas_type.particle_mass,
-        gamma=gas_type.heat_capacity_ratio,
-    )
+    if ui.get("tapered_channel_enabled", False):
+        taper = LinearTaper.from_exit_area(
+            inlet_area=params["area"],
+            exit_area=params["area"] * ui.get("tapered_area_ratio", 1.0),
+            length=params["length"],
+        )
+        tapered_solver = TaperedHallSolver(hall_solver)
+        channel = tapered_solver.march(
+            num_slices=params["num_slices"], length=params["length"], taper=taper,
+            inlet_speed=params["inlet_speed"], inlet_pressure=params["inlet_pressure"],
+            inlet_gas_temperature=params["inlet_gas_temperature"], magnetic_field=params["magnetic_field"],
+            load_resistance=params["load_resistance"], inlet_seed_fraction=params["inlet_seed_fraction"],
+        )
+        out = channel.to_dict()
+        perf = summarize_tapered_performance(
+            out, cp=gas_type.molar_heat_capacity, m_p=gas_type.particle_mass, gamma=gas_type.heat_capacity_ratio,
+        )
+    else:
+        channel = hall_solver.march(**params)
+        out = channel.to_dict()
+        perf = summarize_performance(
+            out, A=params["area"],
+            cp=gas_type.molar_heat_capacity,
+            m_p=gas_type.particle_mass,
+            gamma=gas_type.heat_capacity_ratio,
+        )
     return params, channel, out, perf
 
 
@@ -263,13 +311,131 @@ def bounded_slider(key: str, label: str, default_lo: float, default_hi: float, d
         # for space in this narrow column.
         with st.popover("", width="stretch", help=f"Adjust bounds for {label}"):
             st.markdown(f"**{label}**  \nAdjust slider bounds")
-            st.number_input("Min", key=lo_key, step=step)
-            st.number_input("Max", key=hi_key, step=step)
+            # Private widget keys with an explicit `value=`, copied into the persistent
+            # lo_key/hi_key by hand below -- NOT `key=lo_key`/`key=hi_key` directly. A
+            # popover's contents, like a dialog's (see tapered_channel_dialog's own
+            # comment), aren't part of the element tree while it's collapsed; a widget
+            # bound straight to a persistent key showed 0.0 the first time a popover was
+            # opened (the widget's own `value=0.0` default winning on that first mount)
+            # rather than the already-correct default_lo/default_hi in session_state.
+            new_lo = st.number_input("Min", value=st.session_state[lo_key], step=step, key=f"_bound_lo_widget_{key}")
+            new_hi = st.number_input("Max", value=st.session_state[hi_key], step=step, key=f"_bound_hi_widget_{key}")
+            st.session_state[lo_key] = new_lo
+            st.session_state[hi_key] = new_hi
             if bounds_invalid:
                 st.caption("⚠️ Min must be less than max -- using defaults until fixed.")
             if st.button("Reset to default", key=f"reset_bounds_{key}", width="stretch"):
                 st.session_state["pending_apply"] = {lo_key: default_lo, hi_key: default_hi}
                 st.rerun()
+
+
+@st.dialog("Tapered Channel", width="small")
+def tapered_channel_dialog() -> None:
+    """A linearly-tapered channel (one wall pair fixed, the other diverging/converging
+    at a constant angle -- see Derivation.md's "Variable-Area (Tapered) Channel"
+    section and magnetohydrodynamics.solver.tapered_hall_solver) lives behind this
+    dialog rather than its own sidebar sliders, to keep the sidebar itself short: it's
+    an occasional, advanced setting (off by default), not something tweaked every run
+    the way the inlet conditions are."""
+    st.caption(
+        "Diverge (or converge) the channel linearly from inlet to outlet, instead of "
+        "holding its cross-section constant -- buys back distance from Rayleigh-flow "
+        "choking for a supersonic inlet (see the Profiles tab's Mach number plot), at "
+        "the cost of an approximation (below) that only holds for gentle angles."
+    )
+    # The checkbox/slider below are bound to PRIVATE widget keys, not directly to the
+    # persistent "tapered_channel_enabled"/"tapered_area_ratio" settings -- st.dialog
+    # content only exists in the app's element tree while the dialog is open, and
+    # Streamlit resets (not preserves) a widget's value whenever it's removed and later
+    # re-added (see the "Widget behavior" docs st.segmented_control's own help text
+    # points to). Binding the widget's own `key` straight to the persistent setting
+    # silently reset it to `value=` every time this dialog was reopened -- and on any
+    # OTHER rerun where it wasn't open at all, since the widget (and, it turns out, the
+    # key it owned) didn't exist on that render either. Copying the widget's value into
+    # the persistent key by hand, every render, sidesteps that: the persistent key is
+    # then a plain session_state entry, never bound to this widget's own lifecycle, so
+    # it survives the dialog closing/reopening and every other rerun.
+    enabled = st.checkbox(
+        "Enable tapered channel", value=st.session_state["tapered_channel_enabled"],
+        key="_tapered_channel_enabled_widget",
+    )
+    st.session_state["tapered_channel_enabled"] = enabled
+    area_ratio = st.slider(
+        "Area ratio (outlet / inlet)", 0.2, 4.0, st.session_state["tapered_area_ratio"], step=0.05,
+        key="_tapered_area_ratio_widget", disabled=not enabled,
+        help="> 1 diverges, < 1 converges, = 1 is the constant-area channel above.",
+    )
+    st.session_state["tapered_area_ratio"] = area_ratio
+
+    inlet_area = (st.session_state["channel_side_mm"] / 1000.0) ** 2
+    length = st.session_state["channel_length"]
+    taper = LinearTaper.from_exit_area(inlet_area, inlet_area * area_ratio, length)
+
+    max_half_angle_deg = 15.0  # matches TaperedHallSolver's own default guard
+    half_angle = taper.half_angle_deg
+    if abs(half_angle) <= 0.6 * max_half_angle_deg:
+        color = "green"
+    elif abs(half_angle) <= max_half_angle_deg:
+        color = "orange"
+    else:
+        color = "red"
+    st.metric(
+        "Divergence half-angle", f":{color}[{half_angle:+.2f}°]",
+        help="Ohm's law's dropped v_py/v_pz terms (Derivation.md) are only a "
+             "defensible approximation for GENTLE divergence. Green: comfortably "
+             f"under the {max_half_angle_deg:g}° guard. Orange: approaching it. "
+             "Red: past it -- the solver will warn (or, in strict mode, refuse to run).",
+    )
+    if not enabled:
+        st.caption("Currently disabled -- the channel above uses a constant area.")
+
+    if enabled:
+        st.divider()
+        st.caption(
+            "Live preview, at the current sidebar inlet conditions -- constant area (above) vs. this taper. A "
+            "taper's LOCAL steepness (dA/dx) is the ratio spread over the WHOLE channel length, so the same ratio "
+            "does much less over the short distance where the interaction (or choking, for a supersonic inlet) "
+            "actually happens if the channel is long compared to that distance -- this is where that shows up."
+        )
+        # Two full marches, right here, rather than only reporting the taper's geometry: the
+        # geometry alone (half-angle, area ratio) doesn't say whether it's steep enough to matter
+        # over the distance the flow actually covers before choking, which is exactly what was
+        # confusing about "an area ratio of 2 does ~nothing" for a channel far longer than the
+        # interaction length. `ui_snapshot` reads every other UI_PARAMS key straight from
+        # session_state (set on the initial full script render, same as e.g. `inlet_area` above --
+        # this dialog runs before those widgets re-render this rerun, but their session_state
+        # entries already exist from the run that rendered the button that opened it).
+        ui_snapshot = {key: st.session_state[key] for key in UI_PARAMS}
+        ui_snapshot["num_slices"] = st.session_state["num_slices"]
+        _, flat_channel, flat_out, flat_perf = solve(hall_solver, gas_type, {**ui_snapshot, "tapered_channel_enabled": False})
+        _, tapered_channel, tapered_out, tapered_perf = solve(
+            hall_solver, gas_type, {**ui_snapshot, "tapered_channel_enabled": True, "tapered_area_ratio": area_ratio},
+        )
+        preview_rows = [
+            ("Choked?", str(flat_channel.choked), str(tapered_channel.choked)),
+            ("Distance traveled [mm]", f"{flat_out['x'][-1] * 1000:.3f}", f"{tapered_out['x'][-1] * 1000:.3f}"),
+            ("Load power P_L [W]", f"{flat_perf['PL']:.1f}", f"{tapered_perf['PL']:.1f}"),
+            (
+                "Enthalpy extraction [%]", f"{flat_perf['enthalpy_extraction_ratio'] * 100:.3f}",
+                f"{tapered_perf['enthalpy_extraction_ratio'] * 100:.3f}",
+            ),
+        ]
+        st.dataframe(
+            pd.DataFrame(preview_rows, columns=["", "Constant area", f"{taper.half_angle_deg:+.2f}° taper"]),
+            hide_index=True, width="stretch",
+        )
+        flat_x_last = flat_out["x"][-1]
+        distance_change = abs(tapered_out["x"][-1] - flat_x_last) / flat_x_last if flat_x_last > 0 else 0.0
+        if distance_change < 0.02:
+            st.caption(
+                f"⚠️ Distance traveled changed by only {distance_change * 100:.1f}% -- with the configured channel "
+                f"length ({length:.3g} m), this taper's local steepness (half-angle {taper.half_angle_deg:+.2f}°) "
+                "is too gentle to matter over the short distance where the flow actually chokes/interacts. A "
+                "shorter channel length, or a larger area ratio, concentrates the same taper over less distance."
+            )
+
+    if st.button("Done", width="stretch"):
+        st.rerun()
 
 
 # --- Plotly figure helpers. Every figure gets a shared, compact layout; all comparison
@@ -342,6 +508,16 @@ def profile_mach_number(out: dict, ideal_gas: IdealGas) -> go.Figure:
     mach = ideal_gas.get_mach_number(out["u"], out["Tp"])
     fig = plot_single_axis(out["x"], [("M", mach, COLOR_RED, "solid")], "Mach Number Along the Channel", "M [-]")
     fig.add_hline(y=1.0, line=dict(color="black", width=1))
+    return fig
+
+
+def profile_channel_area(out: dict) -> go.Figure:
+    """Channel cross-sectional area along x -- only meaningful (and only shown) when
+    the "Tapered channel..." dialog's setting is enabled; `out["area"]` only exists on
+    a TaperedChannel.to_dict(), not the constant-area Channel's."""
+    fig = plot_single_axis(
+        out["x"], [("A", out["area"] * 1e4, COLOR_GREEN, "solid")], "Channel Area Along the Channel", "Area [cm²]",
+    )
     return fig
 
 
@@ -490,6 +666,22 @@ with st.sidebar:
         bounded_slider(key, label, lo, hi, default, step)
     bounded_slider("num_slices", *NUM_SLICES_PARAMS)
 
+    # Unlike the sliders above, these two only otherwise get a session_state entry
+    # once the dialog below has actually been opened once -- setdefault here
+    # guarantees they exist from the first script run, the same way every other
+    # CONFIG_KEYS entry already does, so Save (which reads st.session_state[key]
+    # directly for every CONFIG_KEYS entry) never KeyErrors on a session that never
+    # opened this dialog.
+    st.session_state.setdefault("tapered_channel_enabled", False)
+    st.session_state.setdefault("tapered_area_ratio", 1.0)
+    taper_button_label = (
+        f"🔻 Tapered channel: ON ({st.session_state['tapered_area_ratio']:.2f}x)"
+        if st.session_state["tapered_channel_enabled"]
+        else "Tapered channel..."
+    )
+    if st.button(taper_button_label, width="stretch"):
+        tapered_channel_dialog()
+
     st.header("Inlet Conditions")
     for key in ("inlet_gas_temperature", "inlet_pressure_kpa", "inlet_speed", "magnetic_field", "seed_fraction_log10"):
         label, lo, hi, default, step = UI_PARAMS[key]
@@ -529,6 +721,8 @@ with st.sidebar:
 
 ui_values = {key: st.session_state[key] for key in UI_PARAMS}
 ui_values["num_slices"] = st.session_state["num_slices"]
+ui_values["tapered_channel_enabled"] = st.session_state["tapered_channel_enabled"]
+ui_values["tapered_area_ratio"] = st.session_state["tapered_area_ratio"]
 
 params, channel, out, perf = solve(hall_solver, gas_type, ui_values)
 inlet = channel.states[0]
@@ -599,6 +793,8 @@ if active_tab == "📈 Profiles":
         st.plotly_chart(profile_pressure(out), width="stretch", key="plot_pressure")
         st.plotly_chart(profile_hall_parameter(out), width="stretch", key="plot_hall_parameter")
         st.plotly_chart(profile_stability_margin(out, default_seed_type().ionization_potential), width="stretch", key="plot_stability_margin")
+        if "area" in out:  # only present for a tapered channel (see the Geometry sidebar's dialog)
+            st.plotly_chart(profile_channel_area(out), width="stretch", key="plot_channel_area")
 
 if active_tab == "🛡️ Stability":
     stability_tab.render(ui_values)
@@ -610,7 +806,10 @@ if active_tab == "🔎 Inlet Summary":
     ns0 = seed_number_density[0]
     ionization_fraction0 = inlet.electron_number_density / ns0 if ns0 > 0 else float("nan")
     delta_T0 = inlet.electron_temperature / inlet.gas_temperature - 1.0
-    Z0 = channel.load_resistivity / inlet.resistivity
+    # channel.load_resistivity is a single scalar for the constant-area Channel, but a
+    # per-slice array for a tapered TaperedChannel (eta_L = R_load*A(x)/length varies
+    # once area does) -- np.atleast_1d(...)[0] reads "the inlet value" uniformly either way.
+    Z0 = float(np.atleast_1d(channel.load_resistivity)[0]) / inlet.resistivity
     Z_matched0 = inlet.hall_parameter ** 2 + 1.0
     hall_current_ratio0 = abs(inlet.current_density[1] / inlet.current_density[0])
 
@@ -779,9 +978,9 @@ if active_tab == "🧬 Multi-Optimize":
     st.caption(
         "Optimizes seed fraction, load resistivity, inlet pressure, inlet speed, and inlet gas temperature "
         "**together** -- channel geometry and magnetic field stay fixed at their current slider values, since "
-        "those are fixed by the use case. This is a 5-parameter search, so it uses a derivative-free global "
-        "optimizer (the choke limit makes the objective landscape non-smooth) and takes noticeably longer than "
-        "the single-parameter tab."
+        "those are fixed by the use case. Uncheck any parameter below to hold IT fixed too (at its current "
+        "slider value) instead of searching it. This uses a derivative-free global optimizer (the choke limit "
+        "makes the objective landscape non-smooth) and takes noticeably longer than the single-parameter tab."
     )
 
     oc1, oc2 = st.columns([2, 1])
@@ -793,47 +992,64 @@ if active_tab == "🧬 Multi-Optimize":
     popsize = SEARCH_THOROUGHNESS_PRESETS[thoroughness]["popsize"]
 
     st.markdown("**Search bounds**")
-    st.caption("Note: the seed fraction bound is in log10 units, matching its sidebar slider (e.g. -3 → 0.001).")
+    st.caption(
+        "Note: the seed fraction bound is in log10 units, matching its sidebar slider (e.g. -3 → 0.001). "
+        "Uncheck a parameter to hold it fixed at its current sidebar value instead of searching it."
+    )
     multi_bounds: dict[str, tuple[float, float]] = {}
+    multi_enabled: dict[str, bool] = {}
     bound_cols = st.columns(len(MULTI_OPTIMIZABLE_KEYS))
-    for col, key in zip(bound_cols, MULTI_OPTIMIZABLE_KEYS):
+    for col, key in zip(bound_cols, MULTI_OPTIMIZABLE_KEYS, strict=True):
         _, default_lo, default_hi, _, key_step = UI_PARAMS[key]
         with col:
+            multi_enabled[key] = st.checkbox(bounds_label(key), value=True, key=f"multi_optimize_enabled_{key}")
             multi_bounds[key] = st.slider(
                 bounds_label(key), min_value=default_lo, max_value=default_hi,
                 value=(default_lo, default_hi), step=key_step, key=f"multi_bound_range_{key}",
+                disabled=not multi_enabled[key], label_visibility="collapsed",
             )
+            if not multi_enabled[key]:
+                st.caption(f"Fixed: {result_value(key, ui_values[key])}")
 
-    invalid_bounds = [key for key, (lo, hi) in multi_bounds.items() if lo >= hi]
+    # Only parameters left checked above are actually searched; everything else stays at its
+    # current sidebar value in every trial (both the timing samples and the real search below),
+    # via `dict(ui_values, ...)`'s base already carrying every UI_PARAMS key.
+    active_keys = [key for key in MULTI_OPTIMIZABLE_KEYS if multi_enabled[key]]
+    invalid_bounds = [key for key in active_keys if multi_bounds[key][0] >= multi_bounds[key][1]]
 
     # Search at a reduced axial resolution for speed (hundreds-thousands of marches), then
     # re-evaluate the found optimum at the slider's actual resolution for display.
     search_num_slices = min(int(ui_values["num_slices"]), 60)
-    ndim = len(MULTI_OPTIMIZABLE_KEYS)
-    max_evals = popsize * ndim * (maxiter + 1)
+    ndim = len(active_keys)
 
-    # Time evaluations at a few random points drawn from the actual search bounds (not just
-    # the current slider point, which is often mid-choke and unrepresentatively fast/slow) to
-    # give an upfront estimate. Cheap (a handful of extra marches) -- reruns on every change.
-    _rng = np.random.default_rng(0)
-    _sample_times = []
-    for _ in range(5):
-        _trial_ui = dict(ui_values, num_slices=search_num_slices)
-        for _key in MULTI_OPTIMIZABLE_KEYS:
-            _lo, _hi = multi_bounds[_key]
-            _trial_ui[_key] = _rng.uniform(_lo, _hi) if _hi > _lo else _lo
-        _t0 = time.perf_counter()
-        solve(hall_solver, gas_type, _trial_ui)
-        _sample_times.append(time.perf_counter() - _t0)
-    per_eval_s = float(np.mean(_sample_times))
-    # +40% fudge factor: the sampled points tend to under-represent the longer, un-choked
-    # evaluations DE spends more time on as it converges, plus DE's own per-generation and
-    # polish-step overhead aren't captured by march timing alone.
-    estimated_s = per_eval_s * max_evals * 1.4
-    st.caption(
-        f"Estimated time: up to ~{estimated_s:.0f}s ({max_evals:,} evaluations at {search_num_slices} slices "
-        f"each, ~{per_eval_s * 1000:.1f} ms/evaluation). Often finishes sooner via early convergence."
-    )
+    if ndim == 0:
+        st.warning("Check at least one parameter above to search over.")
+        max_evals = 0
+    else:
+        max_evals = popsize * ndim * (maxiter + 1)
+
+        # Time evaluations at a few random points drawn from the actual search bounds (not just
+        # the current slider point, which is often mid-choke and unrepresentatively fast/slow) to
+        # give an upfront estimate. Cheap (a handful of extra marches) -- reruns on every change.
+        _rng = np.random.default_rng(0)
+        _sample_times = []
+        for _ in range(5):
+            _trial_ui = dict(ui_values, num_slices=search_num_slices)
+            for _key in active_keys:
+                _lo, _hi = multi_bounds[_key]
+                _trial_ui[_key] = _rng.uniform(_lo, _hi) if _hi > _lo else _lo
+            _t0 = time.perf_counter()
+            solve(hall_solver, gas_type, _trial_ui)
+            _sample_times.append(time.perf_counter() - _t0)
+        per_eval_s = float(np.mean(_sample_times))
+        # +40% fudge factor: the sampled points tend to under-represent the longer, un-choked
+        # evaluations DE spends more time on as it converges, plus DE's own per-generation and
+        # polish-step overhead aren't captured by march timing alone.
+        estimated_s = per_eval_s * max_evals * 1.4
+        st.caption(
+            f"Estimated time: up to ~{estimated_s:.0f}s ({max_evals:,} evaluations at {search_num_slices} slices "
+            f"each, ~{per_eval_s * 1000:.1f} ms/evaluation). Often finishes sooner via early convergence."
+        )
 
     has_multi_result = (
         "last_multi_optimization" in st.session_state
@@ -841,7 +1057,9 @@ if active_tab == "🧬 Multi-Optimize":
     )
     run_col, apply_col = st.columns([1, 1])
     with run_col:
-        run_multi_clicked = st.button("Run multi-parameter optimization", type="primary", width="stretch")
+        run_multi_clicked = st.button(
+            "Run multi-parameter optimization", type="primary", width="stretch", disabled=ndim == 0,
+        )
     with apply_col:
         apply_multi_clicked = st.button(
             "Apply all optimal values to sliders", disabled=not has_multi_result, width="stretch",
@@ -851,11 +1069,11 @@ if active_tab == "🧬 Multi-Optimize":
         if invalid_bounds:
             st.error(f"Lower bound must be less than upper bound for: {', '.join(bounds_label(k) for k in invalid_bounds)}.")
         else:
-            de_bounds = [multi_bounds[key] for key in MULTI_OPTIMIZABLE_KEYS]
+            de_bounds = [multi_bounds[key] for key in active_keys]
 
             def neg_objective(x):
                 trial_ui = dict(ui_values, num_slices=search_num_slices)
-                for key, value in zip(MULTI_OPTIMIZABLE_KEYS, x):
+                for key, value in zip(active_keys, x, strict=True):
                     trial_ui[key] = value
                 trial_params, _, trial_out, trial_perf = solve(hall_solver, gas_type, trial_ui)
                 return -OBJECTIVES[multi_objective_name](trial_out, trial_params, trial_perf)
@@ -885,14 +1103,14 @@ if active_tab == "🧬 Multi-Optimize":
             progress_bar.progress(1.0, text=f"Done in {total_time:.1f}s ({result.nfev:,} evaluations).")
 
             best_ui = dict(ui_values)
-            for key, value in zip(MULTI_OPTIMIZABLE_KEYS, result.x):
+            for key, value in zip(active_keys, result.x, strict=True):
                 best_ui[key] = value
             best_params, best_channel, best_out, best_perf = solve(hall_solver, gas_type, best_ui)
             best_objective = OBJECTIVES[multi_objective_name](best_out, best_params, best_perf)
 
             st.session_state["last_multi_optimization"] = dict(
                 objective_name=multi_objective_name,
-                values={key: float(value) for key, value in zip(MULTI_OPTIMIZABLE_KEYS, result.x)},
+                values={key: float(value) for key, value in zip(active_keys, result.x, strict=True)},
                 objective=float(best_objective),
                 choked=best_channel.choked,
             )
@@ -915,7 +1133,10 @@ if active_tab == "🧬 Multi-Optimize":
 
             comparison = pd.DataFrame(
                 [
-                    (result_label(key), result_value(key, ui_values[key]), result_value(key, res["values"][key]))
+                    (
+                        result_label(key), result_value(key, ui_values[key]),
+                        result_value(key, res["values"][key]) if key in res["values"] else "-- (fixed)",
+                    )
                     for key in MULTI_OPTIMIZABLE_KEYS
                 ],
                 columns=["Parameter", "Current", "Optimal"],
